@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  --color-profit: #22c55e;
+  --color-loss: #ef4444;
+  --color-info: #22d3ee;
+  --color-warning: #f59e0b;
+  --color-bg-primary: #0a0a0a;
+  --color-bg-card: #141414;
+  --color-border-glow: #16a34a;
+
+  --font-mono: ui-monospace, "SF Mono", Consolas, monospace;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-primary);
+  font-family: var(--font-mono);
+}

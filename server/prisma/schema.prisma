@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  username        String   @unique
+  passwordHash    String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  trades          Trade[]
+  refreshTokens   RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken{
+  id              String    @id @default(uuid())
+  token           String    @unique
+  userId          String    
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  @@map("refresh_tokens")
+}
+
+enum Direction {
+  LONG
+  SHORT
+}
+
+enum TradeSource {
+  MANUAL
+  METAAPI
+  BINANCE
+  PEPPERSTONE
+}
+
+model Trade {
+  id                String      @id @default(uuid())
+  userId            String 
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol            String
+  direction         Direction 
+  broker            String
+  lotSize           Float 
+  entryPrice        Float
+  exitPrice         Float 
+  pnl               Float 
+  openedAt          DateTime
+  closedAt          DateTime
+  notes             String?
+  source            TradeSource   @default(MANUAL)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@map("trades")
+  @@index([userId, openedAt])
+}
