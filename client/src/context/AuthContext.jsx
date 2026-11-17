@@ -1,56 +1,61 @@
 import { createContext, useContext, useState, useEffect } from "react"
-import { api } from '../api/client'
+import { api, tokenStore, setSessionExpiredHandler } from '../api/client'
 
 const AuthContext = createContext(null)
 
+// Read the saved session synchronously on the first render. The old version did
+// this in a useEffect, so ProtectedRoute saw "no user" on the first render and
+// redirected to /login on every page refresh.
+function readStoredUser(){
+    const storedUser = localStorage.getItem('user')
+    if(!storedUser || !tokenStore.getRefresh()) return null
+    try {
+        return JSON.parse(storedUser)
+    } catch {
+        tokenStore.clear()
+        return null
+    }
+}
+
 export function AuthProvider({children}){
-    const [user, setUser] = useState(null)
-    const [loading, setLoading] = useState(null)
+    const [user, setUser] = useState(readStoredUser)
 
-    useEffect(()=>{
-        const storedUser = localStorage.getItem('user')
-        const storedToken = localStorage.getItem('accessToken')
-
-        if(storedUser && storedToken){
-            setUser(JSON.parse(storedUser))
-        }
-        setLoading(false)
+    // When the API layer can't refresh the session, drop the user. ProtectedRoute
+    // then sends them to /login.
+    useEffect(() => {
+        setSessionExpiredHandler(() => setUser(null))
+        return () => setSessionExpiredHandler(() => {})
     }, [])
 
     const login = async (email, password) =>{
         const data = await api.post('/auth/login', {email, password})
-        localStorage.setItem('accessToken', data.accessToken)
-        localStorage.setItem('refreshToken', data.refreshToken)
-        localStorage.setItem('user', JSON.stringify(data.user))
+        tokenStore.setSession(data)
         setUser(data.user)
         return data
     }
 
     const signup = async (email, username, password)=>{
         const data = await api.post('/auth/signup', {email, username, password})
-        localStorage.setItem('accessToken', data.accessToken)
-        localStorage.setItem('refreshToken', data.refreshToken)
-        localStorage.setItem('user', JSON.stringify(data.user))
+        tokenStore.setSession(data)
         setUser(data.user)
         return data
     }
 
     const logout = async () =>{
-        const refreshToken = localStorage.getItem('refreshToken')
+        const refreshToken = tokenStore.getRefresh()
         try {
             if (refreshToken) {
                 await api.post('/auth/logout', {refreshToken})
             }
         } catch (err){
-            console.error('logout error (processing anyway):', err)
+            console.error('logout error (logging out locally anyway):', err)
         }
-        localStorage.removeItem('accessToken')
-        localStorage.removeItem('refreshToken')
-        localStorage.removeItem('user')
+        tokenStore.clear()
         setUser(null)
     }
 
-    return (<AuthContext.Provider value = {{user, loading, login, signup, logout}}>{children}</AuthContext.Provider>)
+    return (<AuthContext.Provider value = {{user, login, signup, logout}}>{children}</AuthContext.Provider>)
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth(){return useContext(AuthContext)}

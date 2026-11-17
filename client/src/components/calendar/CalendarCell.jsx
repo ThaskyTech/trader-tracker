@@ -3,7 +3,6 @@ import { formatCellAmount } from '../../utils/format'
 export default function CalendarCell({ day, amount, isToday, onClick }) {
   const formatted = formatCellAmount(amount)
   const isProfit = amount > 0
-  const isLoss = amount < 0
   const hasData = amount !== null && amount !== undefined
 
   return (

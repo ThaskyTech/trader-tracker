@@ -2,7 +2,6 @@ import prisma from '../config/db.js'
 
 export async function createTrade(req,res){
     try{
-        console.log('Trades received', req.body)
         const {symbol,direction,broker,lotSize,entryPrice,exitPrice,pnl,openedAt,closedAt,notes,source} = req.body
 
         if(!symbol || !direction || !broker || !lotSize || !entryPrice || !exitPrice || pnl === undefined || !openedAt || closedAt){

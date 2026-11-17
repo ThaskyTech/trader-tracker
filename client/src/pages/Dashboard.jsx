@@ -1,5 +1,5 @@
 import Header from '../components/dashboard/Header'
-import PnlCard from '../components/dashboard/PnlCard'
+import PnlCard from '../components/dashboard/PnLCard'
 import WinRateCard from '../components/dashboard/WinRateCard'
 import SystemStatusCard from '../components/dashboard/SystemStatusCard'
 import CalendarGrid from '../components/calendar/CalendarGrid'
