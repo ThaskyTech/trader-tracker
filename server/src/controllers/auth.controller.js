@@ -33,6 +33,12 @@ async function issueTokens(userId){
 
 export async function signup(req, res){
     try{
+        // Private app: signups are closed unless explicitly opened with
+        // ALLOW_SIGNUPS=true. If the variable is missing, signups stay closed.
+        if(process.env.ALLOW_SIGNUPS !== 'true'){
+            return res.status(403).json({error: 'Signups are currently closed.'})
+        }
+
         const { email, username, password } = req.body
 
         if(!email){
