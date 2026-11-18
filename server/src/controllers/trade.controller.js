@@ -1,242 +1,141 @@
 import prisma from '../config/db.js'
+import { HttpError } from '../middleware/error.middleware.js'
+import { toTradeDTO, summarizeTrades, dailyTotals } from '../services/trade.service.js'
+import { convertPnl } from '../services/fx.service.js'
+import {
+    createTradeSchema, updateTradeSchema, checkTradeTimes,
+    timeZoneQuerySchema, monthQuerySchema
+} from '../validators/trade.schema.js'
+import { getLocalParts, localDayRange, localMonthRange, parseDateString } from '../utils/time.js'
 
-export async function createTrade(req,res){
-    try{
-        const {symbol,direction,broker,lotSize,entryPrice,exitPrice,pnl,openedAt,closedAt,notes,source} = req.body
+// No try/catch here: Express 5 sends any thrown error, including a ZodError from
+// .parse(), to errorHandler in error.middleware.js, which builds the response.
 
-        if(!symbol || !direction || !broker || !lotSize || !entryPrice || !exitPrice || pnl === undefined || !openedAt || closedAt){
-        }
-
-        if(!['LONG', 'SHORT'].includes(direction)){
-            return res.status(400).json({error: 'Direction must be LONG or SHORT.'})
-        }
-
-        const trade = await prisma.trade.create({
-            data:{
-                userId: req.userId,
-                symbol,
-                direction,
-                broker,
-                lotSize,
-                entryPrice,
-                exitPrice,
-                pnl,
-                openedAt: new Date(openedAt),
-                closedAt: new Date(closedAt),
-                notes: notes || null,
-                source: source || 'MANUAL'
-            }
-        })
-
-        res.status(201).json({trade})
-    }catch(err){
-        console.error('createTrades error:', err)
-        res.status(500).json({error: 'Something went wrong in trade creation!'})
-    }
+// Year and month from the query, defaulting to the current month in the user's timezone.
+function resolveMonth(query){
+    const { tz, year, month } = monthQuerySchema.parse(query)
+    const now = getLocalParts(new Date(), tz)
+    return { tz, year: year ?? now.year, month: month ?? now.month }
 }
 
-export async function getTrades(req,res){
-    try{
-        const trades = await prisma.trade.findMany({
-            where: { userId: req.userId },
-            orderBy: { openedAt: 'desc'}
-        })
+export async function createTrade(req, res){
+    const data = createTradeSchema.parse(req.body)
+    // Store the USD value alongside what was typed, using the rate on the close date.
+    const fx = await convertPnl(data)
 
-        res.status(200).json({ trades })
+    const trade = await prisma.trade.create({
+        data: { ...data, ...fx, userId: req.userId, source: 'MANUAL' }
+    })
 
-    } catch(err){
-        console.error('getTrades error: ',err)
-        res.status(500).json({ error : 'Something went wrong getting Trades!'})
-    }
+    res.status(201).json({ trade: toTradeDTO(trade) })
 }
 
-export async function getTradesByDay(req,res){
-    try{
-        const { date } = req.params //Format should be: YYYY-MM-DD
-        const startOfDay = new Date(`${date}T00:00:00.000z`)
-        const endOfDay = new Date(`${date}T23:59:59.999z`)
+export async function getTrades(req, res){
+    const trades = await prisma.trade.findMany({
+        where: { userId: req.userId },
+        orderBy: { closedAt: 'desc' }
+    })
 
-        if(isNaN(startOfDay.getTime())){
-            return res.status(400).json({ error : 'Invalid date format.'})
-        }
-
-        const trades = await prisma.trade.findMany({
-            where : {
-                userId: req.userId,
-                openedAt: { gte: startOfDay, lte: endOfDay}
-            },
-            orderBy: { openedAt: 'desc'}
-        })
-
-        res.status(200).json({ trades })
-    }catch(err){
-        console.error('getTradesByDay error: ',err)
-        return res.status(500).json({ error : 'Something went while getting trades by date'})
-    }
+    res.status(200).json({ trades: trades.map(toTradeDTO) })
 }
 
-export async function updateTrade(req,res){
-    try{
-        const { id } = req.params
-        const existingTrade = await prisma.trade.findUnique({where: { id } })
+// GET /trades/:id — one trade, used by the edit form.
+export async function getTrade(req, res){
+    const trade = await prisma.trade.findFirst({ where: { id: req.params.id, userId: req.userId } })
+    if(!trade) throw new HttpError(404, 'Trade not found.')
 
-        if(!existingTrade){
-            return res.status(404).json({ error : 'Trade not Found.'})
-        }
-
-        if(existingTrade.userId !== req.userId){
-            return res.status(403).json({ error : 'You do not have permission to edit this trade!'})
-        }
-
-        const {symbol,direction,broker,lotSize,entryPrice,exitPrice,pnl,openedAt,closedAt,notes} = req.body
-        const updatedTrade = await prisma.trade.update({
-            where: {id},
-            data: {
-                ...(symbol && { symbol }),
-                ...(direction && { direction }),
-                ...(broker && { broker }),
-                ...(lotSize !== undefined && { lotSize }),
-                ...(entryPrice !== undefined && { entryPrice }),
-                ...(exitPrice !== undefined && { exitPrice }),
-                ...(pnl !== undefined && { pnl }),
-                ...(openedAt && { openedAt: new Date(openedAt) }),
-                ...(closedAt && {closedAt: new Date(closedAt) }),
-                ...(notes !== undefined && { notes })
-            }
-        })
-
-        res.status(200).json({ trade: updatedTrade })
-    }catch(err){
-        console.error('updateTrade error: ', err)
-        return res.status(500).json({ error : 'Something went wrong while updating trade!'})
-    }
+    res.status(200).json({ trade: toTradeDTO(trade) })
 }
 
-export async function deleteTrade(req,res){
-    try{
-        const { id } = req.params
-        const existingTrade = await prisma.trade.findUnique({ where : { id } })
+// GET /trades/day/2026-11-17?tz=Africa/Johannesburg
+// Trades that closed on that local calendar day.
+export async function getTradesByDay(req, res){
+    const date = parseDateString(req.params.date)
+    if(!date) throw new HttpError(400, 'Invalid date. Use the format YYYY-MM-DD.')
 
-        if(!existingTrade){
-            return res.status(404).json({ error : 'Trade not found.' })
-        }
+    const { tz } = timeZoneQuerySchema.parse(req.query)
+    const { start, end } = localDayRange(date.year, date.month, date.day, tz)
 
-        if(existingTrade.userId !== req.userId){
-            return res.status(403).json({ error : 'Not qualified to delete trade.' })
-        }
+    const trades = await prisma.trade.findMany({
+        where: { userId: req.userId, closedAt: { gte: start, lt: end } },
+        orderBy: { closedAt: 'desc' }
+    })
 
-        await prisma.trade.delete({ where: { id }});
-        res.status(200).json({ message: 'Trade deleted Successfully.' })
-
-    }catch(err){
-        console.error("deleteTrade error: ",err)
-        return res.status(500).json({ error : 'Something went wrong while deleting trade!' })
-    }
+    res.status(200).json({ trades: trades.map(toTradeDTO) })
 }
 
-export async function getMonthlySummary(req,res){
-    try{
-        const now = new Date()
-        const year = req.query.year ? parseInt(req.query.year) : now.getFullYear()
-        const month = req.query.month ? parseInt(req.query.month) : now.getMonth() + 1
+export async function updateTrade(req, res){
+    const data = updateTradeSchema.parse(req.body)
 
-        if(isNaN(year) || isNaN(month) || month < 1 || month > 12){
-            return res.status(400).json({ error : 'Invalid year or month'})
-        }
+    // Look the trade up by id AND owner. Someone else's trade gives the same 404
+    // as a missing one, so the API never reveals that it exists.
+    const existing = await prisma.trade.findFirst({ where: { id: req.params.id, userId: req.userId } })
+    if(!existing) throw new HttpError(404, 'Trade not found.')
 
-        const startOfMonth = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0))
-        const endOfMonth = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999))
-        const trades = await prisma.trade.findMany({
-            where: {
-                userId: req.userId,
-                openedAt: { gte: startOfMonth, lte: endOfMonth }
-            }
+    const problem = checkTradeTimes({
+        openedAt: data.openedAt ?? existing.openedAt,
+        closedAt: data.closedAt ?? existing.closedAt
+    })
+    if(problem) throw new HttpError(400, `closedAt: ${problem}`)
+
+    // The USD value depends on the amount, its currency and the close date (which
+    // picks the rate). If any of them change, convert again using the merged values.
+    let fx = {}
+    if(data.pnl !== undefined || data.pnlCurrency !== undefined || data.closedAt !== undefined){
+        fx = await convertPnl({
+            pnl: data.pnl ?? existing.pnl,
+            pnlCurrency: data.pnlCurrency ?? existing.pnlCurrency,
+            closedAt: data.closedAt ?? existing.closedAt
         })
-
-        const totalPnl = trades.reduce((sum, t) => sum + t.pnl, 0)
-        const wins = trades.filter(t => t.pnl > 0).length
-        const losses = trades.filter(t => t.pnl < 0).length
-        const totalTrades = trades.length
-        const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0
-
-        res.status(200).json({
-            year,
-            month,
-            totalPnl,
-            wins,
-            losses,
-            totalTrades,
-            winRate: parseInt(winRate.toFixed(1))
-        })
-    }catch(err){
-        console.error('getMonthlySummary error:', err)
-        res.status(500).json({ error: 'Something went wrong fetching the monthly summary'})
     }
 
+    const trade = await prisma.trade.update({ where: { id: existing.id }, data: { ...data, ...fx } })
+
+    res.status(200).json({ trade: toTradeDTO(trade) })
 }
 
-export async function getCalenderSummary(req,res){
-    try{
-        const now = new Date();
-        const year = req.query.year ? parseInt(req.query.year) : now.getFullYear()
-        const month = req.query.month ? parseInt(req.query.month) : now.getMonth() + 1
+export async function deleteTrade(req, res){
+    // deleteMany with userId checks ownership and deletes in one query.
+    const { count } = await prisma.trade.deleteMany({ where: { id: req.params.id, userId: req.userId } })
+    if(count === 0) throw new HttpError(404, 'Trade not found.')
 
-        if(isNaN(year) || isNaN(month) || month < 1 || month > 12){
-            return res.status(400).json({ error: 'Invalid year or month.'})
-        }
-
-        const startOfMonth = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0))
-        const endOfMonth = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999))
-        const trades = await prisma.trade.findMany({
-            where: {
-                userId: req.userId,
-                openedAt: { gte: startOfMonth, lte: endOfMonth }
-            },
-            select: { openedAt: true, pnl: true }
-        })
-
-        const dailyTotals = {}
-
-         for(const trade of trades){
-            const day = trade.openedAt.getUTCDate()
-            dailyTotals[day] = (dailyTotals[day] || 0) + trade.pnl
-         }
-        
-         res.status(200).json({
-            year,
-            month,
-            days: dailyTotals
-         })
-
-    }catch(err){
-        console.error('getCalendarSummary error: ', err)
-        res.status(500).json({ error: 'Something went wrong while fetching C alendar Summary.'})
-    }
+    res.status(200).json({ message: 'Trade deleted successfully.' })
 }
 
-export async function getHistorySummary(req,res){
-    try{
-        const trades = await prisma.trade.findMany({
-            where: { userId: req.userId },
-            select: { pnl: true }
-        })
+// GET /trades/summary/month?year=2026&month=11&tz=Africa/Johannesburg
+export async function getMonthlySummary(req, res){
+    const { tz, year, month } = resolveMonth(req.query)
+    const { start, end } = localMonthRange(year, month, tz)
 
-        const totalPnl = trades.reduce((sum, t)=> sum + t.pnl, 0)
-        const wins = trades.filter(t => t.pnl > 0).length
-        const losses = trades.filter( t => t.pnl < 0).length
-        const totalTrades = trades.length
-        const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0
-        
-        res.status(200).json({
-            totalPnl,
-            wins,
-            losses,
-            totalTrades,
-            winRate: parseFloat(winRate.toFixed(1))
-        })
+    const trades = await prisma.trade.findMany({
+        where: { userId: req.userId, closedAt: { gte: start, lt: end } },
+        select: { pnlUsd: true }
+    })
 
-    }catch(err){
-        console.error('getHostorySummary error: ', err)
-        res.status(500).json({ error: 'Something went wrong while fetching the history summary.'})
-    }
+    res.status(200).json({ year, month, ...summarizeTrades(trades) })
+}
+
+// GET /trades/summary/calendar?year=2026&month=11&tz=Africa/Johannesburg
+// Net P&L per local day: { days: { 1: 840, 2: -1205, ... } }
+export async function getCalendarSummary(req, res){
+    const { tz, year, month } = resolveMonth(req.query)
+    const { start, end } = localMonthRange(year, month, tz)
+
+    const trades = await prisma.trade.findMany({
+        where: { userId: req.userId, closedAt: { gte: start, lt: end } },
+        select: { closedAt: true, pnlUsd: true }
+    })
+
+    const days = dailyTotals(trades, closedAt => getLocalParts(closedAt, tz).day)
+
+    res.status(200).json({ year, month, days })
+}
+
+export async function getHistorySummary(req, res){
+    const trades = await prisma.trade.findMany({
+        where: { userId: req.userId },
+        select: { pnlUsd: true }
+    })
+
+    res.status(200).json(summarizeTrades(trades))
 }

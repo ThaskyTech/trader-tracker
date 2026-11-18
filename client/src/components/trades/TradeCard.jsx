@@ -1,15 +1,30 @@
-export default function TradeCard({ trade }) {
+import { formatTradeTime } from '../../utils/format'
+import { formatMoney } from '../../utils/currency'
+import { useCurrency } from '../../context/CurrencyContext'
+
+// `day` is the Daily Log's date ('YYYY-MM-DD'). Times on that day show as just
+// the time; a trade opened on an earlier day also shows its date.
+export default function TradeCard({ trade, day, onClick }) {
+  const { displayCurrency, formatTradePnl } = useCurrency()
   const isProfit = trade.pnl >= 0
   const isLong = trade.direction === 'LONG'
 
   return (
-    <div style={{
-      backgroundColor: '#141414',
-      borderRadius: '12px',
-      overflow: 'hidden',
-      marginBottom: '10px',
-    }}>
-      {/* Top row — symbol, direction, status */}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.() } }}
+      aria-label={`Edit ${trade.symbol} ${trade.direction} trade`}
+      style={{
+        backgroundColor: '#141414',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        marginBottom: '10px',
+        cursor: onClick ? 'pointer' : 'default',
+      }}
+    >
+      {/* Top row — symbol, direction, source */}
       <div style={{
         backgroundColor: '#1a1a1a',
         padding: '10px 14px',
@@ -32,6 +47,7 @@ export default function TradeCard({ trade }) {
           </span>
         </div>
 
+        {/* MANUAL for now. Broker-synced trades will show BINANCE, METAAPI, etc. */}
         <span style={{
           fontSize: '10px',
           letterSpacing: '0.5px',
@@ -41,7 +57,7 @@ export default function TradeCard({ trade }) {
           color: isLong ? '#22c55e' : '#ef4444',
           border: `1px solid ${isLong ? '#16a34a44' : '#dc262644'}`,
         }}>
-          {trade.status}
+          {trade.source}
         </span>
       </div>
 
@@ -55,8 +71,8 @@ export default function TradeCard({ trade }) {
         }}>
           <DetailField label="BROKER" value={trade.broker} />
           <DetailField label="LOT SIZE" value={trade.lotSize.toFixed(2)} />
-          <DetailField label="ENTRY TIME" value={trade.entryTime} />
-          <DetailField label="EXIT TIME" value={trade.exitTime} />
+          <DetailField label="ENTRY" value={formatTradeTime(trade.openedAt, day)} />
+          <DetailField label="EXIT" value={formatTradeTime(trade.closedAt, day)} />
         </div>
 
         <div>
@@ -68,9 +84,20 @@ export default function TradeCard({ trade }) {
             fontSize: '15px',
             fontWeight: '500'
           }}>
-            {isProfit ? '+' : '-'}${Math.abs(trade.pnl).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            {formatTradePnl(trade, { signed: true })}
           </div>
+          {trade.pnlCurrency !== displayCurrency && (
+            <div style={{ color: '#555', fontSize: '11px', marginTop: '3px' }}>
+              Entered as {formatMoney(trade.pnl, trade.pnlCurrency, { signed: true })}
+            </div>
+          )}
         </div>
+
+        {trade.notes && (
+          <div style={{ color: '#777', fontSize: '12px', marginTop: '10px', lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>
+            {trade.notes}
+          </div>
+        )}
       </div>
     </div>
   )

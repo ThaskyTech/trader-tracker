@@ -3,9 +3,11 @@ import Dashboard from './pages/Dashboard'
 import DailyLog from './pages/DailyLog'
 import History from './pages/History'
 import Settings from './pages/Settings'
+import TradeForm from './pages/TradeForm'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import { AuthProvider } from './context/AuthContext'
+import { CurrencyProvider } from './context/CurrencyContext'
 import ProtectedRoute from './components/common/ProtectedRoute'
 
 const AUTH_ROUTES = ['/login', '/signup']
@@ -32,6 +34,8 @@ function AppShell() {
         <Routes>
           <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/daily/:date" element={<ProtectedRoute><DailyLog /></ProtectedRoute>} />
+          <Route path="/trades/new" element={<ProtectedRoute><TradeForm /></ProtectedRoute>} />
+          <Route path="/trades/:id/edit" element={<ProtectedRoute><TradeForm /></ProtectedRoute>} />
           <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/login" element={<Login />} />
@@ -99,9 +103,11 @@ const navStyle = {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <AppShell />
-      </BrowserRouter>
+      <CurrencyProvider>
+        <BrowserRouter>
+          <AppShell />
+        </BrowserRouter>
+      </CurrencyProvider>
     </AuthProvider>
   )
 }

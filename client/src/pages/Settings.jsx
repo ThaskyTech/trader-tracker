@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
+import { CURRENCIES } from '../utils/currency'
 
 function SettingRow({ label, sublabel, children }) {
   return (
@@ -73,9 +75,23 @@ export default function Settings() {
   const [notifications, setNotifications] = useState(true)
   const [livePrice, setLivePrice] = useState(false)
   const [compactView, setCompactView] = useState(false)
-  const [currency, setCurrency] = useState('USD')
   const navigate = useNavigate()
   const { logout } = useAuth()
+  const { displayCurrency, setDisplayCurrency } = useCurrency()
+  const [currencySaving, setCurrencySaving] = useState(false)
+  const [currencyError, setCurrencyError] = useState(null)
+
+  const changeCurrency = async (code) => {
+    setCurrencySaving(true)
+    setCurrencyError(null)
+    try {
+      await setDisplayCurrency(code)
+    } catch (err) {
+      setCurrencyError(err.message)
+    } finally {
+      setCurrencySaving(false)
+    }
+  }
 
   return (
     <div style={{ paddingBottom: '2rem' }}>
@@ -101,10 +117,15 @@ export default function Settings() {
           <SettingRow label="Broker" sublabel="IC Markets / FTMO">
             <span style={{ color: '#555', fontSize: '12px' }}>EDIT →</span>
           </SettingRow>
-          <SettingRow label="Base Currency">
+          <SettingRow
+            label="Display Currency"
+            sublabel={currencyError ?? 'Amounts are stored in USD and shown in this currency'}
+          >
             <select
-              value={currency}
-              onChange={e => setCurrency(e.target.value)}
+              value={displayCurrency}
+              onChange={e => changeCurrency(e.target.value)}
+              disabled={currencySaving}
+              aria-label="Display currency"
               style={{
                 background: '#1f1f1f',
                 border: '1px solid #2a2a2a',
@@ -116,10 +137,7 @@ export default function Settings() {
                 cursor: 'pointer',
               }}
             >
-              <option value="USD">USD</option>
-              <option value="EUR">EUR</option>
-              <option value="ZAR">ZAR</option>
-              <option value="GBP">GBP</option>
+              {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>)}
             </select>
           </SettingRow>
         </div>

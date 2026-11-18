@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from "react"
+import { createContext, useContext, useState, useEffect, useCallback } from "react"
 import { api, tokenStore, setSessionExpiredHandler } from '../api/client'
 
 const AuthContext = createContext(null)
@@ -54,7 +54,14 @@ export function AuthProvider({children}){
         setUser(null)
     }
 
-    return (<AuthContext.Provider value = {{user, login, signup, logout}}>{children}</AuthContext.Provider>)
+    // Replace the stored user after the server returns a fresh copy, e.g. after
+    // changing the display currency. useCallback keeps it stable for effect deps.
+    const updateUser = useCallback((nextUser) => {
+        tokenStore.setUser(nextUser)
+        setUser(nextUser)
+    }, [])
+
+    return (<AuthContext.Provider value = {{user, login, signup, logout, updateUser}}>{children}</AuthContext.Provider>)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

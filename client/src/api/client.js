@@ -7,6 +7,7 @@ export const tokenStore = {
     getAccess: () => localStorage.getItem('accessToken'),
     getRefresh: () => localStorage.getItem('refreshToken'),
     setAccess: (token) => localStorage.setItem('accessToken', token),
+    setUser: (user) => localStorage.setItem('user', JSON.stringify(user)),
     setSession: ({ accessToken, refreshToken, user }) => {
         localStorage.setItem('accessToken', accessToken)
         localStorage.setItem('refreshToken', refreshToken)
@@ -91,7 +92,14 @@ async function request(endpoint, options = {}, isRetry = false){
 
     const data = await parseBody(response)
 
-    if(!response.ok){ throw new Error(data?.error || `Request failed (${response.status}).`)}
+    if(!response.ok){
+        const error = new Error(data?.error || `Request failed (${response.status}).`)
+        error.status = response.status
+        // Validation errors carry per-field messages, e.g. { lotSize: ['Too small'] },
+        // so a form can show each one next to its input.
+        error.details = data?.details
+        throw error
+    }
 
     return data
 }
@@ -100,19 +108,30 @@ export const api = {
     get: (endpoint) => request(endpoint, { method: 'GET'}),
     post: (endpoint, body) => request(endpoint, { method: 'POST', body: JSON.stringify(body)}),
     put: (endpoint, body) => request(endpoint, { method: 'PUT', body: JSON.stringify(body)}),
+    patch: (endpoint, body) => request(endpoint, { method: 'PATCH', body: JSON.stringify(body)}),
     delete: (endpoint) => request(endpoint, { method: 'DELETE'})
 }
 
-function monthQuery(year, month){
-    return year && month ? `?year=${year}&month=${month}` : ''
+// The browser's IANA timezone, e.g. "Africa/Johannesburg". The server uses it to
+// decide which local calendar day and month each trade belongs to.
+const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+
+function query(params){
+    const search = new URLSearchParams({ tz: timeZone() })
+    for(const [key, value] of Object.entries(params)){
+        if(value !== undefined && value !== null) search.set(key, value)
+    }
+    return `?${search}`
 }
 
 export const tradeApi = {
-    getMonthlySummary: (year, month) => api.get(`/trades/summary/month${monthQuery(year, month)}`),
-    getCalendarSummary: (year, month) => api.get(`/trades/summary/calendar${monthQuery(year, month)}`),
+    getMonthlySummary: (year, month) => api.get(`/trades/summary/month${query({ year, month })}`),
+    getCalendarSummary: (year, month) => api.get(`/trades/summary/calendar${query({ year, month })}`),
     getHistorySummary: () => api.get('/trades/summary/history'),
-    getTradesByDay: (date) => api.get(`/trades/day/${date}`),
+    // date is 'YYYY-MM-DD'
+    getTradesByDay: (date) => api.get(`/trades/day/${date}${query({})}`),
     getAllTrades: () => api.get('/trades'),
+    getTrade: (id) => api.get(`/trades/${encodeURIComponent(id)}`),
     createTrade: (tradeData) => api.post('/trades', tradeData),
     updateTrade: (id, tradeData) => api.put(`/trades/${id}`, tradeData),
     deleteTrade: (id) => api.delete(`/trades/${id}`)

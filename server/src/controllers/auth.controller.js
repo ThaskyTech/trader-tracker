@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
 import prisma from '../config/db.js'
+import { PUBLIC_USER_FIELDS } from './user.controller.js'
 
 const SALT_ROUNDS = 10
 const ACCESS_TOKEN_TTL = '15m'
@@ -65,7 +66,7 @@ export async function signup(req, res){
         const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
         const user = await prisma.user.create({
             data: {email, username, passwordHash},
-            select: {id: true, email: true, username: true, createdAt: true}
+            select: PUBLIC_USER_FIELDS
         })
 
         const { accessToken, refreshToken } = await issueTokens(user.id)
@@ -95,6 +96,7 @@ export async function login(req,res){
             id: user.id,
             email: user.email,
             username: user.username,
+            displayCurrency: user.displayCurrency,
             createdAt: user.createdAt
         }
         res.status(200).json({ user: safeUser, accessToken, refreshToken })

@@ -1,60 +1,39 @@
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import TradeCard from '../components/trades/TradeCard'
+import { tradeApi } from '../api/client'
+import { useCurrency } from '../context/CurrencyContext'
 
-// mock trade data until backend is operational
-const MOCK_TRADES = [
-  {
-    id: 1,
-    symbol: 'BTC/USD',
-    direction: 'LONG',
-    status: 'EXECUTED',
-    broker: 'IC Markets',
-    lotSize: 2.5,
-    entryTime: '08:14:02',
-    exitTime: '09:45:51',
-    pnl: 1250.00,
-  },
-  {
-    id: 2,
-    symbol: 'ETH/USD',
-    direction: 'SHORT',
-    status: 'EXECUTED',
-    broker: 'IC Markets',
-    lotSize: 5.0,
-    entryTime: '11:02:44',
-    exitTime: '11:15:20',
-    pnl: -450.25,
-  },
-  {
-    id: 3,
-    symbol: 'XRP/USD',
-    direction: 'LONG',
-    status: 'EXECUTED',
-    broker: 'FTMO',
-    lotSize: 10.0,
-    entryTime: '14:30:00',
-    exitTime: '15:45:12',
-    pnl: 2621.33,
-  },
-]
+const MONTH_NAMES = ['January','February','March','April','May','June',
+  'July','August','September','October','November','December']
 
 function formatDateLabel(dateStr) {
-  const [year, month, day] = dateStr.split('-').map(Number)
+  const [year, month, day] = (dateStr ?? '').split('-').map(Number)
+  if (!year || !month || !day) return 'Daily Log'
   const date = new Date(year, month - 1, day)
-  const monthNames = ['January','February','March','April','May','June',
-    'July','August','September','October','November','December']
-  return `${monthNames[date.getMonth()]} ${date.getDate()}`
+  return `${MONTH_NAMES[date.getMonth()]} ${date.getDate()}`
 }
 
 export default function DailyLog() {
   const { date } = useParams()
-  const navigate = useNavigate()
+  // The key resets loading state when moving straight from one day to another.
+  return <DailyLogInner key={date} date={date} />
+}
 
-  const aggregatePnl = MOCK_TRADES.reduce((sum, t) => sum + t.pnl, 0)
-  const wins = MOCK_TRADES.filter(t => t.pnl > 0).length
-  const winRate = ((wins / MOCK_TRADES.length) * 100).toFixed(1)
-  const volume = MOCK_TRADES.reduce((sum, t) => sum + t.lotSize, 0)
-  const isProfit = aggregatePnl >= 0
+function DailyLogInner({ date }) {
+  const navigate = useNavigate()
+  const [trades, setTrades] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    tradeApi.getTradesByDay(date)
+      .then(data => { if (!cancelled) setTrades(data.trades) })
+      .catch(err => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [date])
+
+  const addTrade = () => navigate(`/trades/new?date=${date}`)
 
   const handleExport = () => {
     // CSV export logic goes here later
@@ -72,6 +51,7 @@ export default function DailyLog() {
       }}>
         <button
           onClick={() => navigate(-1)}
+          aria-label="Back"
           style={{
             background: 'none',
             border: 'none',
@@ -84,11 +64,63 @@ export default function DailyLog() {
         >
           ←
         </button>
-        <span style={{ color: '#fff', fontSize: '17px', fontWeight: '500' }}>
+        <span style={{ color: '#fff', fontSize: '17px', fontWeight: '500', flex: 1 }}>
           {formatDateLabel(date)} — Daily Log
         </span>
+        <button onClick={addTrade} style={outlineButtonStyle}>+ ADD</button>
       </div>
 
+      {error && (
+        <div style={{
+          margin: '0 1rem',
+          color: '#ef4444',
+          fontSize: '12px',
+          padding: '10px 12px',
+          backgroundColor: '#ef444411',
+          borderRadius: '8px',
+          border: '1px solid #ef444433',
+        }}>
+          {error}
+        </div>
+      )}
+
+      {!error && trades === null && (
+        <div style={{ margin: '0 1rem', color: '#555', fontSize: '12px', letterSpacing: '1px' }}>LOADING...</div>
+      )}
+
+      {trades && <DayContent trades={trades} date={date} onAdd={addTrade} onExport={handleExport} navigate={navigate} />}
+    </div>
+  )
+}
+
+function DayContent({ trades, date, onAdd, onExport, navigate }) {
+  const { formatUsd } = useCurrency()
+
+  if (trades.length === 0) {
+    return (
+      <div style={{
+        margin: '0 1rem',
+        backgroundColor: '#141414',
+        borderRadius: '12px',
+        padding: '2rem 1rem',
+        textAlign: 'center',
+      }}>
+        <div style={{ color: '#555', fontSize: '13px', marginBottom: '16px' }}>No trades closed on this day.</div>
+        <button onClick={onAdd} style={outlineButtonStyle}>LOG A TRADE</button>
+      </div>
+    )
+  }
+
+  // Display-only totals. The server's summary endpoints do the exact Decimal maths.
+  // Summed in USD (pnlUsd), since trades can be entered in different currencies.
+  const aggregatePnl = trades.reduce((sum, t) => sum + t.pnlUsd, 0)
+  const wins = trades.filter(t => t.pnlUsd > 0).length
+  const winRate = ((wins / trades.length) * 100).toFixed(1)
+  const volume = trades.reduce((sum, t) => sum + t.lotSize, 0)
+  const isProfit = aggregatePnl >= 0
+
+  return (
+    <>
       {/* Aggregate card */}
       <div style={{
         margin: '0 1rem',
@@ -106,7 +138,7 @@ export default function DailyLog() {
           fontWeight: '600',
           marginBottom: '14px',
         }}>
-          {isProfit ? '+' : '-'}${Math.abs(aggregatePnl).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          {formatUsd(aggregatePnl, { signed: true })}
         </div>
 
         <div style={{
@@ -125,7 +157,7 @@ export default function DailyLog() {
             <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1px', marginBottom: '4px' }}>
               VOLUME
             </div>
-            <div style={{ color: '#e5e7eb', fontSize: '15px' }}>{volume.toFixed(1)} Lots</div>
+            <div style={{ color: '#e5e7eb', fontSize: '15px' }}>{volume.toFixed(2)} Lots</div>
           </div>
         </div>
       </div>
@@ -138,10 +170,10 @@ export default function DailyLog() {
         margin: '1.25rem 1rem 0.75rem',
       }}>
         <span style={{ color: '#888', fontSize: '12px', letterSpacing: '0.5px' }}>
-          TRADE EXECUTION LOG ({MOCK_TRADES.length})
+          TRADE EXECUTION LOG ({trades.length})
         </span>
         <button
-          onClick={handleExport}
+          onClick={onExport}
           style={{
             background: 'none',
             border: '1px solid #333',
@@ -156,28 +188,29 @@ export default function DailyLog() {
         </button>
       </div>
 
-      {/* Trade cards */}
+      {/* Trade cards — tap one to edit it */}
       <div style={{ padding: '0 1rem' }}>
-        {MOCK_TRADES.map(trade => (
-          <TradeCard key={trade.id} trade={trade} />
+        {trades.map(trade => (
+          <TradeCard
+            key={trade.id}
+            trade={trade}
+            day={date}
+            onClick={() => navigate(`/trades/${trade.id}/edit`)}
+          />
         ))}
       </div>
-
-      {/* Load older */}
-      <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
-        <button style={{
-          background: 'none',
-          border: '1px solid #16a34a55',
-          borderRadius: '8px',
-          color: '#22c55e',
-          fontSize: '12px',
-          letterSpacing: '0.5px',
-          padding: '10px 24px',
-          cursor: 'pointer',
-        }}>
-          LOAD OLDER ENTRIES
-        </button>
-      </div>
-    </div>
+    </>
   )
+}
+
+const outlineButtonStyle = {
+  background: 'none',
+  border: '1px solid #16a34a55',
+  borderRadius: '8px',
+  color: '#22c55e',
+  fontSize: '12px',
+  letterSpacing: '0.5px',
+  padding: '8px 14px',
+  cursor: 'pointer',
+  fontFamily: 'monospace',
 }

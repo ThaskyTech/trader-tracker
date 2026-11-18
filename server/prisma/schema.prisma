@@ -11,6 +11,8 @@ model User {
   email           String   @unique
   username        String   @unique
   passwordHash    String
+  // Money is stored in USD. This only controls the currency amounts are shown in.
+  displayCurrency Currency @default(USD)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   trades          Trade[]
@@ -35,6 +37,17 @@ enum Direction {
   SHORT
 }
 
+// Kept short on purpose: the major trading currencies plus ZAR.
+// Keep in sync with server/src/utils/currency.js and client/src/utils/currency.js.
+enum Currency {
+  USD
+  EUR
+  GBP
+  JPY
+  AUD
+  ZAR
+}
+
 enum TradeSource {
   MANUAL
   METAAPI
@@ -49,10 +62,18 @@ model Trade {
   symbol            String
   direction         Direction 
   broker            String
-  lotSize           Float 
-  entryPrice        Float
-  exitPrice         Float 
-  pnl               Float 
+  // Money and quantities are exact decimals, not floats, so sums never drift
+  // (0.1 + 0.2 is exactly 0.3). 8 decimal places covers crypto prices and lot sizes.
+  lotSize           Decimal       @db.Decimal(20, 8)
+  entryPrice        Decimal       @db.Decimal(20, 8)
+  exitPrice         Decimal       @db.Decimal(20, 8)
+  // P&L exactly as the user entered it, in pnlCurrency.
+  pnl               Decimal       @db.Decimal(20, 8)
+  pnlCurrency       Currency      @default(USD)
+  // Units of pnlCurrency per 1 USD on the day the trade closed (e.g. 16.93 for ZAR).
+  fxRate            Decimal       @default(1) @db.Decimal(20, 10)
+  // pnl converted to USD with fxRate. All totals and summaries use this column.
+  pnlUsd            Decimal       @db.Decimal(20, 8)
   openedAt          DateTime
   closedAt          DateTime
   notes             String?
@@ -62,4 +83,21 @@ model Trade {
 
   @@map("trades")
   @@index([userId, openedAt])
+  // P&L is realised when a trade closes, so the calendar and summaries group by closedAt.
+  @@index([userId, closedAt])
+}
+
+// Daily exchange rates from the Frankfurter API (European Central Bank data), saved
+// so each day is only fetched once. `rate` is units of `currency` per 1 USD.
+// `date` is the day asked for; on weekends and holidays the API gives the last
+// working day's rate, which is the right one to use anyway.
+model FxRate {
+  id        String   @id @default(uuid())
+  date      DateTime @db.Date
+  currency  Currency
+  rate      Decimal  @db.Decimal(20, 10)
+  createdAt DateTime @default(now())
+
+  @@unique([date, currency])
+  @@map("fx_rates")
 }

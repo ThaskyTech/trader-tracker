@@ -4,11 +4,12 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "node --watch server.js",
     "build": "prisma generate",
-    "migrate:deploy": "prisma migrate deploy"
+    "migrate:deploy": "prisma migrate deploy",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -24,7 +25,8 @@
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.22.0",
     "prisma": "^7.8.0",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
