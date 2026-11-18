@@ -1,132 +1,48 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import TradeCard from '../components/trades/TradeCard'
+import { tradeApi } from '../api/client'
+import { useCurrency } from '../context/CurrencyContext'
 
-const MOCK_HISTORY = [
-  {
-    id: 1,
-    symbol: 'BTC/USD',
-    direction: 'LONG',
-    status: 'EXECUTED',
-    broker: 'IC Markets',
-    lotSize: 2.5,
-    entryTime: '08:14:02',
-    exitTime: '09:45:51',
-    pnl: 1250.00,
-    date: '2024-10-24',
-  },
-  {
-    id: 2,
-    symbol: 'ETH/USD',
-    direction: 'SHORT',
-    status: 'EXECUTED',
-    broker: 'IC Markets',
-    lotSize: 5.0,
-    entryTime: '11:02:44',
-    exitTime: '11:15:20',
-    pnl: -450.25,
-    date: '2024-10-24',
-  },
-  {
-    id: 3,
-    symbol: 'XRP/USD',
-    direction: 'LONG',
-    status: 'EXECUTED',
-    broker: 'FTMO',
-    lotSize: 10.0,
-    entryTime: '14:30:00',
-    exitTime: '15:45:12',
-    pnl: 2621.33,
-    date: '2024-10-24',
-  },
-  {
-    id: 4,
-    symbol: 'US30',
-    direction: 'LONG',
-    status: 'EXECUTED',
-    broker: 'FTMO',
-    lotSize: 1.0,
-    entryTime: '09:30:00',
-    exitTime: '10:15:00',
-    pnl: 3420.00,
-    date: '2024-10-18',
-  },
-  {
-    id: 5,
-    symbol: 'GOLD',
-    direction: 'SHORT',
-    status: 'EXECUTED',
-    broker: 'IC Markets',
-    lotSize: 3.0,
-    entryTime: '13:00:00',
-    exitTime: '14:30:00',
-    pnl: -890.50,
-    date: '2024-10-18',
-  },
-  {
-    id: 6,
-    symbol: 'ETH/USD',
-    direction: 'LONG',
-    status: 'EXECUTED',
-    broker: 'Binance',
-    lotSize: 8.0,
-    entryTime: '10:00:00',
-    exitTime: '11:45:00',
-    pnl: 1875.00,
-    date: '2024-09-30',
-  },
-  {
-    id: 7,
-    symbol: 'BTC/USD',
-    direction: 'SHORT',
-    status: 'EXECUTED',
-    broker: 'Binance',
-    lotSize: 4.0,
-    entryTime: '15:00:00',
-    exitTime: '15:45:00',
-    pnl: -320.75,
-    date: '2024-09-15',
-  },
-]
+// Trades per "page". Bots can log hundreds of trades, so History loads them in
+// chunks instead of all at once.
+const PAGE_SIZE = 50
+
+// Each filter pill and the API parameters it sends. The server applies them to
+// both the list and the totals, so the summary bar describes exactly the filtered trades.
+const FILTERS = {
+  ALL: {},
+  LONG: { direction: 'LONG' },
+  SHORT: { direction: 'SHORT' },
+  PROFIT: { outcome: 'PROFIT' },
+  LOSS: { outcome: 'LOSS' },
+}
 
 const MONTHS = [
   'January','February','March','April','May','June',
   'July','August','September','October','November','December'
 ]
 
-function getMonthLabel(dateStr) {
-  const [year, month] = dateStr.split('-').map(Number)
-  return `${MONTHS[month - 1]} ${year}`
-}
-
+// Trades arrive newest first, so consecutive trades in the same local month share a group.
 function groupByMonth(trades) {
-  return trades.reduce((groups, trade) => {
-    const label = getMonthLabel(trade.date)
-    if (!groups[label]) groups[label] = []
-    groups[label].push(trade)
-    return groups
-  }, {})
+  const groups = []
+  for (const trade of trades) {
+    const d = new Date(trade.closedAt)
+    const label = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`
+    if (groups.at(-1)?.label === label) groups.at(-1).trades.push(trade)
+    else groups.push({ label, trades: [trade] })
+  }
+  return groups
 }
-
-const FILTERS = ['ALL', 'LONG', 'SHORT', 'PROFIT', 'LOSS']
 
 export default function History() {
-  const [activeFilter, setActiveFilter] = useState('ALL')
+  // The filter lives in the URL (?filter=LOSS), so coming back from editing a
+  // trade returns to the same filter.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requested = searchParams.get('filter')
+  const filterKey = requested && Object.hasOwn(FILTERS, requested) ? requested : 'ALL'
 
-  const filtered = MOCK_HISTORY.filter(trade => {
-    if (activeFilter === 'LONG') return trade.direction === 'LONG'
-    if (activeFilter === 'SHORT') return trade.direction === 'SHORT'
-    if (activeFilter === 'PROFIT') return trade.pnl > 0
-    if (activeFilter === 'LOSS') return trade.pnl < 0
-    return true
-  })
-
-  const grouped = groupByMonth(filtered)
-  const totalPnl = filtered.reduce((sum, t) => sum + t.pnl, 0)
-  const wins = filtered.filter(t => t.pnl > 0).length
-  const winRate = filtered.length > 0
-    ? ((wins / filtered.length) * 100).toFixed(1)
-    : '0.0'
-  const isProfit = totalPnl >= 0
+  const setFilter = key => setSearchParams(key === 'ALL' ? {} : { filter: key }, { replace: true })
 
   return (
     <div style={{ paddingBottom: '1.5rem' }}>
@@ -141,6 +57,59 @@ export default function History() {
         </div>
       </div>
 
+      {/* The key gives each filter fresh state: its own list, totals and paging. */}
+      <HistoryResults key={filterKey} filterKey={filterKey} onFilter={setFilter} />
+    </div>
+  )
+}
+
+function HistoryResults({ filterKey, onFilter }) {
+  const navigate = useNavigate()
+  const { formatUsd } = useCurrency()
+
+  const [trades, setTrades] = useState(null)
+  const [nextCursor, setNextCursor] = useState(null)
+  const [summary, setSummary] = useState(null)
+  const [error, setError] = useState(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadMoreError, setLoadMoreError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const params = FILTERS[filterKey]
+    Promise.all([
+      tradeApi.listTrades({ ...params, limit: PAGE_SIZE }),
+      tradeApi.getHistorySummary(params),
+    ])
+      .then(([page, totals]) => {
+        if (cancelled) return
+        setTrades(page.trades)
+        setNextCursor(page.nextCursor)
+        setSummary(totals)
+      })
+      .catch(err => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [filterKey])
+
+  const loadMore = async () => {
+    setLoadingMore(true)
+    setLoadMoreError(null)
+    try {
+      const page = await tradeApi.listTrades({ ...FILTERS[filterKey], limit: PAGE_SIZE, cursor: nextCursor })
+      setTrades(current => [...current, ...page.trades])
+      setNextCursor(page.nextCursor)
+    } catch (err) {
+      setLoadMoreError(err.message)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  const isProfit = (summary?.totalPnl ?? 0) >= 0
+  const groups = trades ? groupByMonth(trades) : []
+
+  return (
+    <>
       {/* Summary bar */}
       <div style={{
         margin: '1rem',
@@ -157,24 +126,26 @@ export default function History() {
             TOTAL P/L
           </div>
           <div style={{
-            color: isProfit ? '#22c55e' : '#ef4444',
+            color: summary ? (isProfit ? '#22c55e' : '#ef4444') : '#555',
             fontSize: '18px',
             fontWeight: '600',
           }}>
-            {isProfit ? '+' : '-'}${Math.abs(totalPnl).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            {summary ? formatUsd(summary.totalPnl, { signed: true }) : '—'}
           </div>
         </div>
         <div style={{ textAlign: 'center' }}>
           <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1px', marginBottom: '4px' }}>
             TRADES
           </div>
-          <div style={{ color: '#e5e7eb', fontSize: '18px' }}>{filtered.length}</div>
+          <div style={{ color: '#e5e7eb', fontSize: '18px' }}>{summary ? summary.totalTrades : '—'}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1px', marginBottom: '4px' }}>
             WIN RATE
           </div>
-          <div style={{ color: '#22d3ee', fontSize: '18px' }}>{winRate}%</div>
+          <div style={{ color: '#22d3ee', fontSize: '18px' }}>
+            {summary ? `${summary.winRate.toFixed(1)}%` : '—'}
+          </div>
         </div>
       </div>
 
@@ -187,22 +158,23 @@ export default function History() {
         marginBottom: '1rem',
         scrollbarWidth: 'none',
       }}>
-        {FILTERS.map(filter => (
+        {Object.keys(FILTERS).map(filter => (
           <button
             key={filter}
-            onClick={() => setActiveFilter(filter)}
+            onClick={() => onFilter(filter)}
+            aria-pressed={filterKey === filter}
             style={{
-              background: activeFilter === filter ? '#22c55e' : '#141414',
-              border: activeFilter === filter ? 'none' : '1px solid #2a2a2a',
+              background: filterKey === filter ? '#22c55e' : '#141414',
+              border: filterKey === filter ? 'none' : '1px solid #2a2a2a',
               borderRadius: '20px',
-              color: activeFilter === filter ? '#000' : '#666',
+              color: filterKey === filter ? '#000' : '#666',
               fontSize: '11px',
               letterSpacing: '0.5px',
               padding: '6px 14px',
               cursor: 'pointer',
               whiteSpace: 'nowrap',
               fontFamily: 'monospace',
-              fontWeight: activeFilter === filter ? '600' : '400',
+              fontWeight: filterKey === filter ? '600' : '400',
               transition: 'all 0.15s',
             }}
           >
@@ -211,36 +183,89 @@ export default function History() {
         ))}
       </div>
 
-      {/* Grouped trade list */}
-      {Object.keys(grouped).length === 0 ? (
-        <div style={{
-          textAlign: 'center',
-          color: '#444',
-          fontSize: '13px',
-          marginTop: '3rem',
-          letterSpacing: '0.5px',
-        }}>
-          NO TRADES MATCH THIS FILTER
-        </div>
-      ) : (
-        Object.entries(grouped).map(([month, trades]) => (
-          <div key={month} style={{ padding: '0 1rem', marginBottom: '0.5rem' }}>
-            <div style={{
-              color: '#444',
-              fontSize: '10px',
-              letterSpacing: '1.5px',
-              marginBottom: '10px',
-              paddingBottom: '6px',
-              borderBottom: '1px solid #1f1f1f',
-            }}>
-              {month.toUpperCase()}
-            </div>
-            {trades.map(trade => (
-              <TradeCard key={trade.id} trade={trade} />
-            ))}
-          </div>
-        ))
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {!error && trades === null && (
+        <div style={{ margin: '0 1rem', color: '#555', fontSize: '12px', letterSpacing: '1px' }}>LOADING...</div>
       )}
+
+      {trades?.length === 0 && (
+        <div style={{ textAlign: 'center', marginTop: '3rem' }}>
+          <div style={{ color: '#444', fontSize: '13px', letterSpacing: '0.5px', marginBottom: '16px' }}>
+            {filterKey === 'ALL' ? 'NO TRADES YET' : 'NO TRADES MATCH THIS FILTER'}
+          </div>
+          {filterKey === 'ALL' && (
+            <button onClick={() => navigate('/trades/new')} style={outlineButtonStyle}>LOG A TRADE</button>
+          )}
+        </div>
+      )}
+
+      {/* Grouped trade list. Cards show full dates (day = null), since a month holds many days. */}
+      {groups.map(group => (
+        <div key={group.label} style={{ padding: '0 1rem', marginBottom: '0.5rem' }}>
+          <div style={{
+            color: '#444',
+            fontSize: '10px',
+            letterSpacing: '1.5px',
+            marginBottom: '10px',
+            paddingBottom: '6px',
+            borderBottom: '1px solid #1f1f1f',
+          }}>
+            {group.label.toUpperCase()}
+          </div>
+          {group.trades.map(trade => (
+            <TradeCard
+              key={trade.id}
+              trade={trade}
+              day={null}
+              onClick={() => navigate(`/trades/${trade.id}/edit`)}
+            />
+          ))}
+        </div>
+      ))}
+
+      {trades?.length > 0 && (
+        <div style={{ textAlign: 'center', marginTop: '0.5rem', padding: '0 1rem' }}>
+          <div style={{ color: '#444', fontSize: '11px', marginBottom: '10px' }}>
+            Showing {trades.length} of {summary?.totalTrades ?? trades.length}
+          </div>
+          {loadMoreError && <ErrorBox>{loadMoreError}</ErrorBox>}
+          {nextCursor && (
+            <button onClick={loadMore} disabled={loadingMore} style={outlineButtonStyle}>
+              {loadingMore ? 'LOADING...' : 'LOAD OLDER ENTRIES'}
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
+function ErrorBox({ children }) {
+  return (
+    <div role="alert" style={{
+      margin: '0 1rem 0.75rem',
+      color: '#ef4444',
+      fontSize: '12px',
+      padding: '10px 12px',
+      backgroundColor: '#ef444411',
+      borderRadius: '8px',
+      border: '1px solid #ef444433',
+      textAlign: 'left',
+    }}>
+      {children}
     </div>
   )
+}
+
+const outlineButtonStyle = {
+  background: 'none',
+  border: '1px solid #16a34a55',
+  borderRadius: '8px',
+  color: '#22c55e',
+  fontSize: '12px',
+  letterSpacing: '0.5px',
+  padding: '10px 24px',
+  cursor: 'pointer',
+  fontFamily: 'monospace',
 }

@@ -1,4 +1,12 @@
-export default function Header() {
+import { useCurrency } from '../../context/CurrencyContext'
+
+// Top of the dashboard. This becomes total net worth once broker balances sync.
+// Until then it shows all-time realised P&L from logged trades.
+export default function Header({ history }) {
+  const { formatUsd } = useCurrency()
+  const total = history?.totalPnl
+  const color = total === undefined ? '#555' : total < 0 ? '#ef4444' : '#22c55e'
+
   return (
     <div style={{
       display: 'flex',
@@ -15,15 +23,15 @@ export default function Header() {
           letterSpacing: '1.5px',
           marginBottom: '4px',
         }}>
-          COMMAND CENTER BALANCE
+          ALL-TIME REALISED P/L
         </div>
         <div style={{
-          color: '#22c55e',
+          color,
           fontSize: '25px',
           fontWeight: '600',
           letterSpacing: '-0.5px',
         }}>
-          $142,509.32
+          {total === undefined ? '—' : formatUsd(total, { signed: true })}
         </div>
       </div>
 

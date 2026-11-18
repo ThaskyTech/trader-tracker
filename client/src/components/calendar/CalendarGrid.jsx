@@ -1,68 +1,33 @@
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import CalendarCell from './CalendarCell'
-
-// mock data — keyed by day number, value is net P&L for that day
-const MOCK_DATA = {
-  1:  840,
-  2:  -1205,
-  4:  3645,
-  5:  4200,
-  6:  1125,
-  7:  -240,
-  8:  1130,
-  9:  5600,
-  10: -380,
-  12: -3202,
-  13: 2454,
-  14: 2243,
-  15: -1507,
-  18: 4601,
-  19: -1625,
-  20: 2752,
-  21: 3730,
-  25: -3905,
-  26: 4150,
-  27: -459,
-  28: 341,
-  29: 4382,
-}
+import { useCurrency } from '../../context/CurrencyContext'
 
 const MONTHS = [
   'JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE',
   'JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'
 ]
 
-export default function CalendarGrid() {
+const pad = n => String(n).padStart(2, '0')
+
+// view: { year, month (1-12) }, owned by the Dashboard so the P&L and win rate
+// cards follow the same month. days: { 1: 840, 2: -1205, ... } in USD, or
+// undefined while loading.
+// onDayClick: optional (dateKey) => void. Defaults to opening that day's Daily Log;
+// pass null to make the days not clickable (the account preview does this).
+export default function CalendarGrid({ view, days, onPrev, onNext, onDayClick }) {
   const navigate = useNavigate()
+  const { formatUsd } = useCurrency()
+  const { year, month } = view
 
   const today = new Date()
-  const [viewYear, setViewYear] = useState(today.getFullYear())
-  const [viewMonth, setViewMonth] = useState(today.getMonth())
+  const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+  const daysInMonth = new Date(year, month, 0).getDate()
+  const dayNumbers = Array.from({ length: daysInMonth }, (_, i) => i + 1)
 
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
-
-  const isToday = (day) =>
-    day === today.getDate() &&
-    viewMonth === today.getMonth() &&
-    viewYear === today.getFullYear()
-
-  const handlePrev = () => {
-    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1) }
-    else setViewMonth(m => m - 1)
-  }
-
-  const handleNext = () => {
-    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1) }
-    else setViewMonth(m => m + 1)
-  }
-
-  const handleDayPress = (day) => {
-    const month = String(viewMonth + 1).padStart(2, '0')
-    const dayStr = String(day).padStart(2, '0')
-    navigate(`/daily/${viewYear}-${month}-${dayStr}`)
-  }
+  // Any day up to today opens its Daily Log, including empty ones, so a missed
+  // trade can be added from there. Future days can't have closed trades yet.
+  const dateKey = day => `${year}-${pad(month)}-${pad(day)}`
+  const openDay = onDayClick === undefined ? key => navigate(`/daily/${key}`) : onDayClick
 
   return (
     <div style={{
@@ -78,16 +43,16 @@ export default function CalendarGrid() {
         justifyContent: 'space-between',
         marginBottom: '12px',
       }}>
-        <button onClick={handlePrev} style={arrowStyle}>‹</button>
+        <button onClick={onPrev} aria-label="Previous month" style={arrowStyle}>‹</button>
         <span style={{
           color: '#e5e7eb',
           fontSize: '13px',
           fontWeight: '500',
           letterSpacing: '1.5px',
         }}>
-          {MONTHS[viewMonth]} {viewYear}
+          {MONTHS[month - 1]} {year}
         </span>
-        <button onClick={handleNext} style={arrowStyle}>›</button>
+        <button onClick={onNext} aria-label="Next month" style={arrowStyle}>›</button>
       </div>
 
       {/* Grid */}
@@ -95,16 +60,23 @@ export default function CalendarGrid() {
         display: 'grid',
         gridTemplateColumns: 'repeat(4, 1fr)',
         gap: '6px',
+        opacity: days ? 1 : 0.5,
+        transition: 'opacity 0.15s',
       }}>
-        {days.map(day => (
-          <CalendarCell
-            key={day}
-            day={day}
-            amount={MOCK_DATA[day] ?? null}
-            isToday={isToday(day)}
-            onClick={handleDayPress}
-          />
-        ))}
+        {dayNumbers.map(day => {
+          const key = dateKey(day)
+          const amount = days?.[day] ?? null
+          return (
+            <CalendarCell
+              key={day}
+              day={day}
+              amount={amount}
+              label={amount === null ? null : formatUsd(amount, { signed: true, compact: true })}
+              isToday={key === todayKey}
+              onClick={openDay && key <= todayKey ? () => openDay(key) : null}
+            />
+          )
+        })}
       </div>
     </div>
   )

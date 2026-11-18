@@ -1,10 +1,13 @@
 import prisma from '../config/db.js'
 import { HttpError } from '../middleware/error.middleware.js'
-import { toTradeDTO, summarizeTrades, dailyTotals } from '../services/trade.service.js'
+import {
+    toTradeDTO, summarizeTrades, dailyTotals,
+    tradeFilterWhere, TRADE_LIST_ORDER, encodeCursor, decodeCursor, afterCursorWhere
+} from '../services/trade.service.js'
 import { convertPnl } from '../services/fx.service.js'
 import {
     createTradeSchema, updateTradeSchema, checkTradeTimes,
-    timeZoneQuerySchema, monthQuerySchema
+    timeZoneQuerySchema, monthQuerySchema, listTradesQuerySchema, tradeFilterSchema
 } from '../validators/trade.schema.js'
 import { getLocalParts, localDayRange, localMonthRange, parseDateString } from '../utils/time.js'
 
@@ -30,13 +33,32 @@ export async function createTrade(req, res){
     res.status(201).json({ trade: toTradeDTO(trade) })
 }
 
+// GET /trades?limit=50&direction=LONG&outcome=PROFIT&cursor=...
+// -> { trades, nextCursor }. nextCursor is null on the last page.
 export async function getTrades(req, res){
-    const trades = await prisma.trade.findMany({
-        where: { userId: req.userId },
-        orderBy: { closedAt: 'desc' }
+    const { limit, cursor, ...filters } = listTradesQuerySchema.parse(req.query)
+
+    let after = {}
+    if(cursor){
+        const position = decodeCursor(cursor)
+        if(!position) throw new HttpError(400, 'Invalid cursor.')
+        after = afterCursorWhere(position)
+    }
+
+    // Ask for one extra row: if it comes back, there's another page.
+    const rows = await prisma.trade.findMany({
+        where: { userId: req.userId, ...tradeFilterWhere(filters), ...after },
+        orderBy: TRADE_LIST_ORDER,
+        take: limit === undefined ? undefined : limit + 1
     })
 
-    res.status(200).json({ trades: trades.map(toTradeDTO) })
+    const hasMore = limit !== undefined && rows.length > limit
+    const trades = hasMore ? rows.slice(0, limit) : rows
+
+    res.status(200).json({
+        trades: trades.map(toTradeDTO),
+        nextCursor: hasMore ? encodeCursor(trades.at(-1)) : null
+    })
 }
 
 // GET /trades/:id — one trade, used by the edit form.
@@ -131,9 +153,13 @@ export async function getCalendarSummary(req, res){
     res.status(200).json({ year, month, days })
 }
 
+// GET /trades/summary/history?direction=LONG&outcome=PROFIT
+// All-time totals, optionally for the same filters as the trade list.
 export async function getHistorySummary(req, res){
+    const filters = tradeFilterSchema.parse(req.query)
+
     const trades = await prisma.trade.findMany({
-        where: { userId: req.userId },
+        where: { userId: req.userId, ...tradeFilterWhere(filters) },
         select: { pnlUsd: true }
     })
 

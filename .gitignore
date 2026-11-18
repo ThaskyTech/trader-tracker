@@ -3,3 +3,6 @@ node_modules/
 dist/
 build/
 .DS_Store
+# Claude memory bank (private project notes, may contain confidential details)
+CLAUDE.md
+DECISIONS.md

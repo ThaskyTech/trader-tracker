@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL
+export const API_URL = import.meta.env.VITE_API_URL
 
 // Tokens live in localStorage. That is fine for this app: the frontend and backend
 // are on different domains, which makes httpOnly cookies unreliable (Safari blocks
@@ -116,21 +116,30 @@ export const api = {
 // decide which local calendar day and month each trade belongs to.
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
 
-function query(params){
-    const search = new URLSearchParams({ tz: timeZone() })
+// { limit: 50, cursor: undefined } -> '?limit=50'. Empty values are left out.
+function toQueryString(params){
+    const search = new URLSearchParams()
     for(const [key, value] of Object.entries(params)){
-        if(value !== undefined && value !== null) search.set(key, value)
+        if(value !== undefined && value !== null && value !== '') search.set(key, value)
     }
-    return `?${search}`
+    const text = search.toString()
+    return text ? `?${text}` : ''
 }
+
+// For endpoints that group by local day or month, so they need the timezone.
+const query = (params) => toQueryString({ tz: timeZone(), ...params })
 
 export const tradeApi = {
     getMonthlySummary: (year, month) => api.get(`/trades/summary/month${query({ year, month })}`),
     getCalendarSummary: (year, month) => api.get(`/trades/summary/calendar${query({ year, month })}`),
-    getHistorySummary: () => api.get('/trades/summary/history'),
+    // filters: { direction: 'LONG' | 'SHORT', outcome: 'PROFIT' | 'LOSS' }, all optional
+    getHistorySummary: (filters = {}) => api.get(`/trades/summary/history${toQueryString(filters)}`),
     // date is 'YYYY-MM-DD'
     getTradesByDay: (date) => api.get(`/trades/day/${date}${query({})}`),
-    getAllTrades: () => api.get('/trades'),
+    // Newest first. params: { limit, cursor, direction, outcome }, all optional.
+    // Returns { trades, nextCursor }; pass nextCursor back to get the next page.
+    listTrades: (params = {}) => api.get(`/trades${toQueryString(params)}`),
+    getRecentTrades: (limit) => api.get(`/trades${toQueryString({ limit })}`),
     getTrade: (id) => api.get(`/trades/${encodeURIComponent(id)}`),
     createTrade: (tradeData) => api.post('/trades', tradeData),
     updateTrade: (id, tradeData) => api.put(`/trades/${id}`, tradeData),

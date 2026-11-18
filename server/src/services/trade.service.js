@@ -13,6 +13,38 @@ export function toTradeDTO(trade){
     return dto
 }
 
+// Prisma `where` conditions for the History filters.
+export function tradeFilterWhere({ direction, outcome } = {}){
+    return {
+        ...(direction && { direction }),
+        ...(outcome === 'PROFIT' && { pnlUsd: { gt: 0 } }),
+        ...(outcome === 'LOSS' && { pnlUsd: { lt: 0 } })
+    }
+}
+
+// Paging. Trades are listed newest first, by closedAt, with id breaking ties when
+// two trades closed at the same moment (common with bots). A cursor records where
+// the last page ended, so the next page starts right after it. Unlike "skip 50",
+// that doesn't shift if a new trade is added between page loads.
+export const TRADE_LIST_ORDER = [{ closedAt: 'desc' }, { id: 'desc' }]
+
+export function encodeCursor(trade){
+    return Buffer.from(`${trade.closedAt.toISOString()}|${trade.id}`).toString('base64url')
+}
+
+// Returns { closedAt, id }, or null if the cursor is malformed.
+export function decodeCursor(cursor){
+    const [iso, id, extra] = Buffer.from(cursor, 'base64url').toString('utf8').split('|')
+    const closedAt = new Date(iso)
+    if(!id || extra !== undefined || isNaN(closedAt.getTime())) return null
+    return { closedAt, id }
+}
+
+// Trades that come after the cursor in TRADE_LIST_ORDER.
+export function afterCursorWhere({ closedAt, id }){
+    return { OR: [{ closedAt: { lt: closedAt } }, { closedAt, id: { lt: id } }] }
+}
+
 // Totals use Decimal arithmetic, so summing many trades never drifts
 // (with floats, 0.1 + 0.2 = 0.30000000000000004).
 // Everything is summed in USD (pnlUsd), whatever currency each trade was entered in.

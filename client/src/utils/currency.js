@@ -14,11 +14,22 @@ const BY_CODE = Object.fromEntries(CURRENCIES.map(c => [c.code, c]))
 
 export const currencySymbol = code => BY_CODE[code]?.symbol ?? code
 
-// formatMoney(1250.5, 'ZAR')                   -> 'R1,250.50'
-// formatMoney(-1250.5, 'ZAR', { signed: true }) -> '-R1,250.50'  (signed also adds '+' to gains)
-export function formatMoney(amount, code, { signed = false } = {}){
+// Short form for tight spaces like calendar cells: 12345 -> '12.3K', 1234567 -> '1.2M', 845.9 -> '845'.
+// Truncates rather than rounds, so a cell never overstates a profit or a loss.
+function compactNumber(abs){
+  if(abs >= 1e6) return `${(Math.floor(abs / 1e5) / 10).toFixed(1)}M`
+  if(abs >= 1e3) return `${(Math.floor(abs / 100) / 10).toFixed(1)}K`
+  return String(Math.floor(abs))
+}
+
+// formatMoney(1250.5, 'ZAR')                    -> 'R1,250.50'
+// formatMoney(-1250.5, 'ZAR', { signed: true })  -> '-R1,250.50'  (signed also adds '+' to gains)
+// formatMoney(12345, 'ZAR', { compact: true })   -> 'R12.3K'
+export function formatMoney(amount, code, { signed = false, compact = false } = {}){
   const { symbol, decimals } = BY_CODE[code] ?? { symbol: `${code} `, decimals: 2 }
-  const number = Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+  const number = compact
+    ? compactNumber(Math.abs(amount))
+    : Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
   const sign = amount < 0 ? '-' : signed ? '+' : ''
   return `${sign}${symbol}${number}`
 }

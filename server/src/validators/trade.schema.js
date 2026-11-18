@@ -58,6 +58,22 @@ const timeZoneParam = z.string()
 
 export const timeZoneQuerySchema = z.object({ tz: timeZoneParam })
 
+// Filters shared by the trade list and the history summary, so the History page's
+// totals always describe the same trades as its list. Break-even trades match neither outcome.
+const tradeFilterFields = {
+    direction: z.enum(['LONG', 'SHORT']).optional(),
+    outcome: z.enum(['PROFIT', 'LOSS']).optional()
+}
+export const tradeFilterSchema = z.object(tradeFilterFields)
+
+// GET /trades?limit=50&direction=LONG&cursor=...  Newest first.
+// No limit means all matching trades. `cursor` is the nextCursor from the previous page.
+export const listTradesQuerySchema = z.object({
+    ...tradeFilterFields,
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+    cursor: z.string().max(200).optional()
+})
+
 export const monthQuerySchema = z.object({
     tz: timeZoneParam,
     year: z.coerce.number().int().min(2000).max(2100).optional(),

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Prisma } from '@prisma/client'
-import { summarizeTrades, dailyTotals, toTradeDTO } from '../src/services/trade.service.js'
+import { summarizeTrades, dailyTotals, toTradeDTO, tradeFilterWhere, encodeCursor, decodeCursor, afterCursorWhere } from '../src/services/trade.service.js'
 
 const d = (value) => new Prisma.Decimal(value)
 
@@ -38,5 +38,36 @@ describe('toTradeDTO', () => {
     it('turns Decimal fields into plain numbers for JSON', () => {
         const dto = toTradeDTO({ id: 't1', symbol: 'BTCUSDT', lotSize: d('0.015'), entryPrice: d('64201.5'), exitPrice: d('65000'), pnl: d('200'), pnlUsd: d('11.81'), fxRate: d('16.9327') })
         expect(dto).toEqual({ id: 't1', symbol: 'BTCUSDT', lotSize: 0.015, entryPrice: 64201.5, exitPrice: 65000, pnl: 200, pnlUsd: 11.81, fxRate: 16.9327 })
+    })
+})
+
+describe('tradeFilterWhere', () => {
+    it('builds no conditions without filters', () => {
+        expect(tradeFilterWhere({})).toEqual({})
+    })
+
+    it('filters by direction and by the sign of the USD P&L (break-even matches neither)', () => {
+        expect(tradeFilterWhere({ direction: 'SHORT', outcome: 'PROFIT' })).toEqual({ direction: 'SHORT', pnlUsd: { gt: 0 } })
+        expect(tradeFilterWhere({ outcome: 'LOSS' })).toEqual({ pnlUsd: { lt: 0 } })
+    })
+})
+
+describe('trade list cursors', () => {
+    const trade = { id: '6f1c2a9e-0000-4000-8000-000000000001', closedAt: new Date('2026-11-17T10:00:00.000Z') }
+
+    it('round-trips the last trade of a page', () => {
+        expect(decodeCursor(encodeCursor(trade))).toEqual(trade)
+    })
+
+    it('rejects malformed cursors', () => {
+        for(const bad of ['', 'not-a-cursor', Buffer.from('nonsense|').toString('base64url'), Buffer.from('2026-11-17T10:00:00Z|a|b').toString('base64url')]){
+            expect(decodeCursor(bad)).toBeNull()
+        }
+    })
+
+    it('continues after the cursor, using id to order trades that closed at the same moment', () => {
+        expect(afterCursorWhere(trade)).toEqual({
+            OR: [{ closedAt: { lt: trade.closedAt } }, { closedAt: trade.closedAt, id: { lt: trade.id } }]
+        })
     })
 })

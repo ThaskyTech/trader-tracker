@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createTradeSchema, updateTradeSchema, monthQuerySchema } from '../src/validators/trade.schema.js'
+import { createTradeSchema, updateTradeSchema, monthQuerySchema, listTradesQuerySchema, tradeFilterSchema } from '../src/validators/trade.schema.js'
 
 const validTrade = {
     symbol: ' eurusd ',
@@ -77,6 +77,27 @@ describe('updateTradeSchema', () => {
 
     it('rejects an empty update', () => {
         expect(updateTradeSchema.safeParse({}).success).toBe(false)
+    })
+})
+
+describe('listTradesQuerySchema', () => {
+    it('coerces the limit and allows leaving it out', () => {
+        expect(listTradesQuerySchema.parse({ limit: '5' })).toEqual({ limit: 5 })
+        expect(listTradesQuerySchema.parse({})).toEqual({})
+    })
+
+    it('rejects a limit that is zero, fractional or too large', () => {
+        for(const limit of ['0', '2.5', '501', 'abc']){
+            expect(listTradesQuerySchema.safeParse({ limit }).success).toBe(false)
+        }
+    })
+})
+
+describe('tradeFilterSchema', () => {
+    it('accepts the History filters and rejects unknown values', () => {
+        expect(tradeFilterSchema.parse({ direction: 'LONG', outcome: 'LOSS' })).toEqual({ direction: 'LONG', outcome: 'LOSS' })
+        expect(tradeFilterSchema.safeParse({ direction: 'UP' }).success).toBe(false)
+        expect(tradeFilterSchema.safeParse({ outcome: 'BREAKEVEN' }).success).toBe(false)
     })
 })
 

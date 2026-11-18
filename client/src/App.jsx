@@ -4,6 +4,9 @@ import DailyLog from './pages/DailyLog'
 import History from './pages/History'
 import Settings from './pages/Settings'
 import TradeForm from './pages/TradeForm'
+import Accounts from './pages/Accounts'
+import AddAccount from './pages/AddAccount'
+import AccountDetail from './pages/AccountDetail'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import { AuthProvider } from './context/AuthContext'
@@ -36,6 +39,9 @@ function AppShell() {
           <Route path="/daily/:date" element={<ProtectedRoute><DailyLog /></ProtectedRoute>} />
           <Route path="/trades/new" element={<ProtectedRoute><TradeForm /></ProtectedRoute>} />
           <Route path="/trades/:id/edit" element={<ProtectedRoute><TradeForm /></ProtectedRoute>} />
+          <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
+          <Route path="/accounts/new" element={<ProtectedRoute><AddAccount /></ProtectedRoute>} />
+          <Route path="/accounts/:id" element={<ProtectedRoute><AccountDetail /></ProtectedRoute>} />
           <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/login" element={<Login />} />
@@ -58,9 +64,14 @@ function AppShell() {
           alignItems: 'center',
           justifyContent: 'space-around',
           paddingBottom: 'env(safe-area-inset-bottom)',
+          // Above any page content; below bottom sheets (z-index 1000), which cover it on purpose.
+          zIndex: 50,
         }}>
           <NavLink to="/" end style={navStyle}>
             {({ isActive }) => <NavItem icon="⊞" label="HOME" active={isActive} />}
+          </NavLink>
+          <NavLink to="/accounts" style={navStyle}>
+            {({ isActive }) => <NavItem icon="▤" label="ACCOUNTS" active={isActive} />}
           </NavLink>
           <NavLink to="/history" style={navStyle}>
             {({ isActive }) => <NavItem icon="◫" label="HISTORY" active={isActive} />}

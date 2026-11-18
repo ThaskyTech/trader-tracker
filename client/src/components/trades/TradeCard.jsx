@@ -4,7 +4,9 @@ import { useCurrency } from '../../context/CurrencyContext'
 
 // `day` is the Daily Log's date ('YYYY-MM-DD'). Times on that day show as just
 // the time; a trade opened on an earlier day also shows its date.
-export default function TradeCard({ trade, day, onClick }) {
+// withinAccount: on an account's own page, every trade has that account's broker and
+// source, so both are left out instead of repeated on every card (D-45).
+export default function TradeCard({ trade, day, onClick, withinAccount = false }) {
   const { displayCurrency, formatTradePnl } = useCurrency()
   const isProfit = trade.pnl >= 0
   const isLong = trade.direction === 'LONG'
@@ -48,7 +50,7 @@ export default function TradeCard({ trade, day, onClick }) {
         </div>
 
         {/* MANUAL for now. Broker-synced trades will show BINANCE, METAAPI, etc. */}
-        <span style={{
+        {!withinAccount && <span style={{
           fontSize: '10px',
           letterSpacing: '0.5px',
           padding: '3px 8px',
@@ -58,18 +60,19 @@ export default function TradeCard({ trade, day, onClick }) {
           border: `1px solid ${isLong ? '#16a34a44' : '#dc262644'}`,
         }}>
           {trade.source}
-        </span>
+        </span>}
       </div>
 
       {/* Detail grid */}
       <div style={{ padding: '12px 14px' }}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          // Without the broker there are three fields, which fit on one row.
+          gridTemplateColumns: withinAccount ? '1fr 1fr 1fr' : '1fr 1fr',
           gap: '10px',
           marginBottom: '12px',
         }}>
-          <DetailField label="BROKER" value={trade.broker} />
+          {!withinAccount && <DetailField label="BROKER" value={trade.broker} />}
           <DetailField label="LOT SIZE" value={trade.lotSize.toFixed(2)} />
           <DetailField label="ENTRY" value={formatTradeTime(trade.openedAt, day)} />
           <DetailField label="EXIT" value={formatTradeTime(trade.closedAt, day)} />
