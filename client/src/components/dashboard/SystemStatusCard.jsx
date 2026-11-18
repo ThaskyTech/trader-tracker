@@ -4,10 +4,6 @@ import { API_URL } from '../../api/client'
 const PING_EVERY_MS = 30 * 1000
 const TIMEOUT_MS = 8000
 
-function apiHost() {
-  try { return new URL(API_URL).host } catch { return 'not configured' }
-}
-
 const latencyColor = ms => (ms < 300 ? '#22c55e' : ms < 1000 ? '#f59e0b' : '#ef4444')
 
 // Real connection check: times a request to the API's /health endpoint, every 30s.
@@ -66,20 +62,12 @@ export default function SystemStatusCard() {
         API CONNECTION<br />{headline}
       </div>
 
-      <div style={{
-        color: '#444',
-        fontSize: '11px',
-        letterSpacing: '0.5px',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-      }}>
-        Latency:{' '}
+      {/* No "Host:" line: the server's address doesn't help the user decide anything. */}
+      <div style={{ color: '#444', fontSize: '11px', letterSpacing: '0.5px' }}>
+        Response time:{' '}
         <span style={{ color: status?.latency != null ? latencyColor(status.latency) : '#666' }}>
           {status?.latency != null ? `${status.latency}ms` : '—'}
         </span>
-        {' '}|{' '}
-        Host: <span style={{ color: '#666' }}>{apiHost()}</span>
       </div>
     </div>
   )

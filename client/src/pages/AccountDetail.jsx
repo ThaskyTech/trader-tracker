@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import EquityChart from '../components/accounts/EquityChart'
-import { PreviewBanner, Section, Sheet, Field, PrimaryButton, OutlineButton, StylePicker } from '../components/accounts/ui'
+import { Section, Sheet, Field, PrimaryButton, OutlineButton, StylePicker } from '../components/accounts/ui'
 import { inputStyle } from '../components/accounts/styles'
 import PnlCard from '../components/dashboard/PnLCard'
 import WinRateCard from '../components/dashboard/WinRateCard'
@@ -11,10 +11,8 @@ import { CATEGORIES, CATEGORY_KEYS, PROVIDERS, accountTitle, freshnessLine, isAu
 import { CURRENCIES, formatMoney, fromUsd } from '../utils/currency'
 import { parseAmount, toLocalDateString } from '../utils/tradeForm'
 import { useCurrency } from '../context/CurrencyContext'
-import {
-  useAccountsPreview, previewActions, accountFigures, netWorthUsd, equitySeries,
-  accountMonth, accountTrades, accountCash,
-} from '../preview/accountsPreview'
+import { useAccounts, netWorthOf } from '../context/AccountsContext'
+import { accountApi, tradeApi } from '../api/client'
 
 const TABS = [
   { key: 'overview', label: 'OVERVIEW' },
@@ -28,37 +26,39 @@ function shiftMonth({ year, month }, delta) {
 }
 
 // One account's page (D-45): the Home screen limited to this account, plus its cash
-// movements and connection settings.
+// movements and connection settings. The account and its figures come from the shared
+// accounts list; each tab loads the rest itself.
 export default function AccountDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const store = useAccountsPreview()
+  const { accounts, active, byId, titleOf, error, refresh } = useAccounts()
   const [tab, setTab] = useState('overview')
-  const account = store.accounts.find(a => a.id === id)
+  const account = byId(id)
 
   if (!account) {
     return (
       <div style={{ padding: '1rem' }}>
         <BackBar title="Account" onBack={() => navigate('/accounts')} />
-        <div style={{ color: '#777', fontSize: '13px', marginTop: '1rem' }}>
-          This account doesn't exist (it may have been deleted, or the preview reset on reload).
+        <div style={{ color: error ? '#ef4444' : '#777', fontSize: '13px', marginTop: '1rem' }}>
+          {accounts === null
+            ? (error ? `Couldn't load the account: ${error}` : 'Loading…')
+            : "This account doesn't exist. It may have been deleted."}
         </div>
       </div>
     )
   }
 
-  const figures = accountFigures(store, account)
-  const title = accountTitle(account, store.accounts)
+  const figures = account.figures
+  const title = titleOf(account)
   const archived = Boolean(account.archivedAt)
-  const netWorth = netWorthUsd(store)
+  const netWorth = netWorthOf(active)
   const share = !archived && netWorth > 0 ? (figures.equity / netWorth) * 100 : undefined
 
   return (
     <div style={{ paddingBottom: '5.5rem' }}>
       <AccountHeader account={account} title={title} onBack={() => navigate(-1)} />
-      <PreviewBanner />
 
-      <StatusBanner account={account} />
+      <StatusBanner account={account} onRestored={refresh} />
 
       <div role="tablist" style={{ display: 'flex', margin: '0.75rem 1rem 0', borderBottom: '1px solid #1f1f1f' }}>
         {TABS.map(t => (
@@ -79,9 +79,9 @@ export default function AccountDetail() {
         ))}
       </div>
 
-      {tab === 'overview' && <OverviewTab store={store} account={account} figures={figures} share={share} />}
-      {tab === 'cash' && <CashTab store={store} account={account} figures={figures} />}
-      {tab === 'connection' && <ConnectionTab store={store} account={account} title={title} figures={figures} />}
+      {tab === 'overview' && <OverviewTab account={account} figures={figures} share={share} />}
+      {tab === 'cash' && <CashTab account={account} figures={figures} onChanged={refresh} />}
+      {tab === 'connection' && <ConnectionTab account={account} title={title} figures={figures} onChanged={refresh} />}
 
       {/* Log a trade on this account: the form opens with the account locked */}
       {!archived && (
@@ -153,28 +153,49 @@ function AccountHeader({ account, title, onBack }) {
 
 // Archived, or a broken connection: say so at the top, never show silently wrong numbers (D-14).
 // The header already says "archived", "sync failed" or when it last synced, so these add
-// only what it can't: the consequence and the fix.
-function StatusBanner({ account }) {
+// only what it can't: the consequence and the fix. An account the migration created
+// without a style gets a nudge to pick one (D-47 exception).
+function StatusBanner({ account, onRestored }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
   const state = syncState(account)
+
+  const restore = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await accountApi.restore(account.id)
+      await onRestored()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (account.archivedAt) {
     return (
       <Banner color="#9ca3af">
         <div>Not counted in net worth. Its trades still count in History and your stats.</div>
-        <OutlineButton color="#22c55e" onClick={() => previewActions.restoreAccount(account.id)} style={{ marginTop: '8px' }}>RESTORE</OutlineButton>
+        {error && <div style={{ color: '#ef4444', marginTop: '4px' }}>{error}</div>}
+        <OutlineButton color="#22c55e" onClick={restore} disabled={busy} style={{ marginTop: '8px' }}>{busy ? 'RESTORING…' : 'RESTORE'}</OutlineButton>
       </Banner>
     )
   }
   if (state === 'ERROR' || state === 'RECONNECT') {
+    // Reconnecting arrives with the sync adapters (roadmap 7-8).
     return (
       <Banner color="#ef4444">
         <div>{account.lastError}</div>
         <div style={{ color: '#9ca3af', marginTop: '4px' }}>Figures below are from {timeAgo(account.lastSyncedAt)}.</div>
-        <OutlineButton color="#ef4444" onClick={() => previewActions.reconnect(account.id)} style={{ marginTop: '8px' }}>RECONNECT</OutlineButton>
       </Banner>
     )
   }
   if (state === 'STALE') {
     return <Banner color="#f59e0b">That's later than expected ({PROVIDERS[account.provider].freshness.toLowerCase()}), so figures may be out of date.</Banner>
+  }
+  if (!account.style) {
+    return <Banner color="#38bdf8">Pick a trading style in Connection → Details. It completes this account's title.</Banner>
   }
   return null
 }
@@ -190,22 +211,57 @@ function Banner({ color, children }) {
   )
 }
 
+function ErrorLine({ children }) {
+  return <div role="alert" style={{ color: '#ef4444', fontSize: '12px', margin: '0.75rem 1rem 0' }}>{children}</div>
+}
+
 // --- Overview ---
 
-function OverviewTab({ store, account, figures, share }) {
+function OverviewTab({ account, figures, share }) {
   const navigate = useNavigate()
   const { formatUsd, displayCurrency, rates } = useCurrency()
   const [view, setView] = useState(() => {
     const now = new Date()
     return { year: now.getFullYear(), month: now.getMonth() + 1 }
   })
-  const month = accountMonth(store, account.id, view)
-  const previous = accountMonth(store, account.id, shiftMonth(view, -1))
-  const trades = accountTrades(store, account.id)
+  const viewKey = `${view.year}-${view.month}`
+  // Tagged with what they belong to, so a slow reply for October can't land on November.
+  const [month, setMonth] = useState(null)
+  const [extras, setExtras] = useState(null) // { key, points, recent }
+  const [error, setError] = useState(null)
   const color = CATEGORIES[account.category].color
   // Same slot rules as the card (D-47): a figure appears only when it says something new.
   const live = Boolean(account.positions)
   const native = account.currency !== displayCurrency ? fromUsd(figures.equity, account.currency, rates) : null
+  // Changes whenever the balance does (a trade, deposit or correction), so the chart and
+  // recent trades reload with it.
+  const version = `${account.id}:${figures.balance}:${figures.tradeCount}`
+
+  useEffect(() => {
+    let cancelled = false
+    const previous = shiftMonth(view, -1)
+    Promise.all([
+      tradeApi.getMonthlySummary(view.year, view.month, account.id),
+      tradeApi.getMonthlySummary(previous.year, previous.month, account.id),
+      tradeApi.getCalendarSummary(view.year, view.month, account.id),
+    ])
+      .then(([summary, previousSummary, calendar]) => {
+        if (!cancelled) setMonth({ key: `${viewKey}:${version}`, summary, previousSummary, days: calendar.days })
+      })
+      .catch(err => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [view, viewKey, account.id, version])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([accountApi.equity(account.id, 90), tradeApi.getRecentTrades(3, account.id)])
+      .then(([equity, recent]) => { if (!cancelled) setExtras({ key: version, points: equity.points, recent: recent.trades }) })
+      .catch(err => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [account.id, version])
+
+  const shownMonth = month?.key === `${viewKey}:${version}` ? month : null
+  const shownExtras = extras?.key === version ? extras : null
 
   return (
     <>
@@ -229,33 +285,40 @@ function OverviewTab({ store, account, figures, share }) {
         </div>
       </Section>
 
+      {error && <ErrorLine>Couldn't load everything: {error}</ErrorLine>}
+
       <Section title="EQUITY">
-        <EquityChart points={equitySeries(store, account)} color={color} />
+        {shownExtras
+          ? <EquityChart points={shownExtras.points} color={color} />
+          : <div style={{ color: '#555', fontSize: '12px', padding: '2rem 0', textAlign: 'center' }}>Loading…</div>}
       </Section>
 
       <Positions account={account} />
 
       <div style={{ marginTop: '0.75rem' }}>
-        <PnlCard view={view} summary={month.summary} previousSummary={previous.summary} />
-        <WinRateCard summary={month.summary} />
+        <PnlCard view={view} summary={shownMonth?.summary} previousSummary={shownMonth?.previousSummary} />
+        <WinRateCard summary={shownMonth?.summary} />
         <CalendarGrid
           view={view}
-          days={month.days}
+          days={shownMonth?.days}
           onPrev={() => setView(v => shiftMonth(v, -1))}
           onNext={() => setView(v => shiftMonth(v, 1))}
-          onDayClick={null}
+          // A day opens its Daily Log filtered to this account (D-46).
+          onDayClick={key => navigate(`/daily/${key}?account=${account.id}`)}
         />
       </div>
 
       <Section
         title="RECENT TRADES"
-        action={trades.length > 0 && (
-          <OutlineButton color="#22c55e" onClick={() => navigate(`/history?account=${account.id}`)}>VIEW ALL {trades.length}</OutlineButton>
+        action={figures.tradeCount > 0 && (
+          <OutlineButton color="#22c55e" onClick={() => navigate(`/history?account=${account.id}`)}>VIEW ALL {figures.tradeCount}</OutlineButton>
         )}
       >
-        {trades.length === 0
-          ? <div style={{ color: '#555', fontSize: '12px' }}>No trades on this account yet.</div>
-          : trades.slice(0, 3).map(trade => <TradeCard key={trade.id} trade={trade} day={null} withinAccount />)}
+        {!shownExtras && <div style={{ color: '#555', fontSize: '12px' }}>Loading…</div>}
+        {shownExtras?.recent.length === 0 && <div style={{ color: '#555', fontSize: '12px' }}>No trades on this account yet.</div>}
+        {shownExtras?.recent.map(trade => (
+          <TradeCard key={trade.id} trade={trade} day={null} withinAccount onClick={() => navigate(`/trades/${trade.id}/edit`)} />
+        ))}
       </Section>
     </>
   )
@@ -270,6 +333,8 @@ function Figure({ label, value, color = '#e5e7eb' }) {
   )
 }
 
+// Synced accounts report open positions from roadmap 7; until then every account is
+// manual and only closed trades count, which this says rather than showing an empty list.
 function Positions({ account }) {
   const { formatUsd } = useCurrency()
 
@@ -326,12 +391,25 @@ const MOVEMENT = {
   ADJUSTMENT: { label: 'Balance correction', color: '#9ca3af' },
 }
 
-function CashTab({ store, account, figures }) {
+function CashTab({ account, figures, onChanged }) {
   const { formatUsd } = useCurrency()
   const [recording, setRecording] = useState(null) // 'DEPOSIT' | 'WITHDRAWAL'
-  const cash = accountCash(store, account.id)
+  const [cash, setCash] = useState(null) // { key, list }
+  const [error, setError] = useState(null)
   const auto = isAutoSync(account)
   const archived = Boolean(account.archivedAt)
+  // Reloads after a deposit, withdrawal or correction changes the balance.
+  const version = `${account.id}:${figures.balance}`
+
+  useEffect(() => {
+    let cancelled = false
+    accountApi.listCash(account.id)
+      .then(data => { if (!cancelled) setCash({ key: version, list: data.cash }) })
+      .catch(err => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [account.id, version])
+
+  const list = cash?.key === version ? cash.list : null
 
   return (
     <>
@@ -359,8 +437,10 @@ function CashTab({ store, account, figures }) {
             Imported from {account.broker} automatically on each sync.
           </div>
         )}
-        {cash.length === 0 && <div style={{ color: '#555', fontSize: '12px' }}>None recorded yet.</div>}
-        {cash.map((c, i) => (
+        {error && <div role="alert" style={{ color: '#ef4444', fontSize: '12px' }}>{error}</div>}
+        {!error && !list && <div style={{ color: '#555', fontSize: '12px' }}>Loading…</div>}
+        {list?.length === 0 && <div style={{ color: '#555', fontSize: '12px' }}>None recorded yet.</div>}
+        {list?.map((c, i) => (
           <div key={c.id} style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
             padding: '10px 0', borderTop: i ? '1px solid #1f1f1f' : 'none',
@@ -368,7 +448,7 @@ function CashTab({ store, account, figures }) {
             <div style={{ minWidth: 0 }}>
               <div style={{ color: '#e5e7eb', fontSize: '13px' }}>{MOVEMENT[c.type].label}</div>
               <div style={{ color: '#555', fontSize: '11px', marginTop: '3px' }}>
-                {new Date(c.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                {new Date(c.occurredAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
                 {' · '}{c.origin === 'SYNCED' ? 'imported' : 'manual'}
                 {c.note && ` · ${c.note}`}
               </div>
@@ -378,7 +458,7 @@ function CashTab({ store, account, figures }) {
         ))}
       </Section>
 
-      {recording && <CashSheet account={account} type={recording} onClose={() => setRecording(null)} />}
+      {recording && <CashSheet account={account} type={recording} onClose={() => setRecording(null)} onSaved={onChanged} />}
     </>
   )
 }
@@ -396,30 +476,37 @@ function Row({ label, value, strong }) {
   )
 }
 
-function CashSheet({ account, type, onClose }) {
-  const { rates } = useCurrency()
+function CashSheet({ account, type, onClose, onSaved }) {
   const [amount, setAmount] = useState('')
   const [currency, setCurrency] = useState(account.currency)
   const [date, setDate] = useState(() => toLocalDateString(new Date()))
   const [note, setNote] = useState('')
   const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
   const isDeposit = type === 'DEPOSIT'
+  const today = toLocalDateString(new Date())
+  // Earlier money is already in the opening balance (D-19), so earlier dates aren't offered.
+  const earliest = toLocalDateString(new Date(account.openingDate))
 
-  const save = e => {
+  const save = async e => {
     e.preventDefault()
     const value = parseAmount(amount)
     if (value === null || value <= 0) return setError('Enter an amount above zero.')
-    if (date > toLocalDateString(new Date())) return setError("The date can't be in the future.")
-    const rate = currency === 'USD' ? 1 : rates?.[currency]
-    if (!rate) return setError("Exchange rates haven't loaded yet. Try again in a moment.")
-    const usd = value / rate
-    previewActions.addCash({
-      accountId: account.id, type,
-      amountUsd: isDeposit ? usd : -usd,
-      date: new Date(`${date}T12:00:00`).toISOString(),
-      note: note.trim() || null,
-    })
-    onClose()
+    if (date > today) return setError("The date can't be in the future.")
+    if (date < earliest) return setError("That's before this account's start date, so its opening balance already includes it.")
+    setSaving(true)
+    setError(null)
+    try {
+      // Today: the actual time, so it sorts after anything earlier today. Past days: midday,
+      // safely inside that day in any timezone.
+      const occurredAt = date === today ? new Date().toISOString() : new Date(`${date}T12:00:00`).toISOString()
+      await accountApi.addCash(account.id, { type, amount: value, currency, occurredAt, note: note.trim() || null })
+      await onSaved()
+      onClose()
+    } catch (err) {
+      setError(err.message)
+      setSaving(false)
+    }
   }
 
   return (
@@ -435,13 +522,13 @@ function CashSheet({ account, type, onClose }) {
           </div>
         </Field>
         <Field label="DATE" htmlFor="cash-date">
-          <input id="cash-date" type="date" value={date} max={toLocalDateString(new Date())} onChange={e => setDate(e.target.value)} style={inputStyle(false)} />
+          <input id="cash-date" type="date" value={date} min={earliest} max={today} onChange={e => setDate(e.target.value)} style={inputStyle(false)} />
         </Field>
         <Field label="NOTE (OPTIONAL)" htmlFor="cash-note">
           <input id="cash-note" value={note} onChange={e => setNote(e.target.value)} maxLength={120}
             placeholder={isDeposit ? 'From FNB' : 'To FNB'} autoComplete="off" style={inputStyle(false)} />
         </Field>
-        <PrimaryButton type="submit">{isDeposit ? 'SAVE DEPOSIT' : 'SAVE WITHDRAWAL'}</PrimaryButton>
+        <PrimaryButton type="submit" disabled={saving}>{saving ? 'SAVING…' : isDeposit ? 'SAVE DEPOSIT' : 'SAVE WITHDRAWAL'}</PrimaryButton>
       </form>
     </Sheet>
   )
@@ -449,21 +536,33 @@ function CashSheet({ account, type, onClose }) {
 
 // --- Connection panel, details, archive and delete ---
 
-function ConnectionTab({ store, account, title, figures }) {
+function ConnectionTab({ account, title, figures, onChanged }) {
   const navigate = useNavigate()
   const { formatUsd } = useCurrency()
   const [sheet, setSheet] = useState(null) // 'correct' | 'archive' | 'delete'
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
   const provider = PROVIDERS[account.provider]
   const auto = isAutoSync(account)
-  const state = syncState(account)
   const archived = Boolean(account.archivedAt)
-  const trades = accountTrades(store, account.id)
-  const cash = accountCash(store, account.id)
+
+  const archive = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await accountApi.archive(account.id)
+      await onChanged()
+      navigate('/accounts', { replace: true })
+    } catch (err) {
+      setError(err.message)
+      setBusy(false)
+    }
+  }
 
   return (
     <>
       {/* No Status or Last synced rows: the header shows both on every tab. The error message
-          isn't repeated here either: the banner under the header shows it with RECONNECT. */}
+          isn't repeated here either: the banner under the header shows it. */}
       <Section title="CONNECTION">
         <Row label="Type" value={provider.label} />
         <Row label="Method" value={provider.method} />
@@ -471,11 +570,10 @@ function ConnectionTab({ store, account, title, figures }) {
         <Row label="Account number" value={account.accountNumber ? `ends in ${account.accountNumber}` : 'not set'} />
         {auto && <Row label="Credentials" value={account.credentialHint ?? 'None (removed)'} />}
 
-        {!archived && (
+        {/* Sync now and replace key arrive with the sync adapters (roadmap 7-8). */}
+        {!archived && !auto && (
           <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
-            {auto && <OutlineButton color="#22c55e" onClick={() => previewActions.syncNow(account.id)} disabled={state === 'ERROR' || state === 'RECONNECT'}>SYNC NOW</OutlineButton>}
-            {auto && <OutlineButton onClick={() => previewActions.reconnect(account.id)}>{account.provider === 'CTRADER' ? 'RECONNECT' : 'REPLACE KEY'}</OutlineButton>}
-            {!auto && <OutlineButton onClick={() => setSheet('correct')}>CORRECT BALANCE</OutlineButton>}
+            <OutlineButton onClick={() => setSheet('correct')}>CORRECT BALANCE</OutlineButton>
           </div>
         )}
         {account.provider === 'MT5' && (
@@ -485,7 +583,7 @@ function ConnectionTab({ store, account, title, figures }) {
         )}
       </Section>
 
-      <DetailsForm key={account.id} store={store} account={account} />
+      <DetailsForm key={account.id} account={account} onSaved={onChanged} />
 
       <Section title="REMOVE">
         {!archived && (
@@ -498,18 +596,19 @@ function ConnectionTab({ store, account, title, figures }) {
         <div style={{ color: '#555', fontSize: '11px', marginTop: '6px', lineHeight: 1.5 }}>Removes the account and all its trades. Can't be undone.</div>
       </Section>
 
-      {sheet === 'correct' && <CorrectBalanceSheet account={account} figures={figures} onClose={() => setSheet(null)} />}
+      {sheet === 'correct' && <CorrectBalanceSheet account={account} figures={figures} onClose={() => setSheet(null)} onSaved={onChanged} />}
 
       {sheet === 'archive' && (
         <Sheet title={`Archive ${title}?`} onClose={() => setSheet(null)}>
           <ul style={listStyle}>
             {auto && <li>Syncing stops and the stored credentials are deleted.</li>}
             <li>Its equity ({formatUsd(figures.equity)}) leaves your net worth.</li>
-            <li>Its {trades.length} trades stay in History, P&L and win rate.</li>
+            <li>Its {figures.tradeCount} {figures.tradeCount === 1 ? 'trade stays' : 'trades stay'} in History, P&L and win rate.</li>
             <li>You can restore it from the Archived list{auto ? ', then reconnect it' : ''}.</li>
           </ul>
-          <PrimaryButton style={{ backgroundColor: '#b45309' }} onClick={() => { previewActions.archiveAccount(account.id); navigate('/accounts', { replace: true }) }}>
-            ARCHIVE
+          {error && <div role="alert" style={{ color: '#ef4444', fontSize: '12px', marginBottom: '10px' }}>{error}</div>}
+          <PrimaryButton style={{ backgroundColor: '#b45309' }} disabled={busy} onClick={archive}>
+            {busy ? 'ARCHIVING…' : 'ARCHIVE'}
           </PrimaryButton>
         </Sheet>
       )}
@@ -518,34 +617,50 @@ function ConnectionTab({ store, account, title, figures }) {
         <DeleteSheet
           account={account}
           title={title}
-          impact={{ equity: archived ? 0 : figures.equity, trades: trades.length, pnl: trades.reduce((s, t) => s + t.pnlUsd, 0), cash: cash.length }}
+          impact={{ equity: archived ? 0 : figures.equity, trades: figures.tradeCount, pnl: figures.allTimePnl }}
           onClose={() => setSheet(null)}
-          onDeleted={() => navigate('/accounts', { replace: true })}
+          onDeleted={async () => { await onChanged(); navigate('/accounts', { replace: true }) }}
         />
       )}
     </>
   )
 }
 
-function DetailsForm({ store, account }) {
+function DetailsForm({ account, onSaved }) {
+  const { accounts } = useAccounts()
   const [style, setStyle] = useState(account.style)
   const [category, setCategory] = useState(account.category)
   const [accountNumber, setAccountNumber] = useState(account.accountNumber ?? '')
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
   const changed = style !== account.style || category !== account.category || accountNumber !== (account.accountNumber ?? '')
   const edited = () => { setError(null); setSaved(false) }
 
   const candidate = { ...account, style, accountNumber }
-  const previewTitle = accountTitle(candidate, store.accounts)
+  const previewTitle = accountTitle(candidate, accounts ?? [])
 
-  const save = e => {
+  const save = async e => {
     e.preventDefault()
     if (accountNumber && !/^\d{4}$/.test(accountNumber)) return setError('Exactly 4 digits.')
-    const clash = titleClashError(candidate, store.accounts)
+    const clash = titleClashError(candidate, accounts ?? [])
     if (clash) return setError(clash)
-    previewActions.updateAccount(account.id, { style, category, accountNumber })
-    setSaved(true)
+    // Only what changed, so an untouched missing style isn't sent (it can't be cleared).
+    const changes = {
+      ...(style !== account.style && { style }),
+      ...(category !== account.category && { category }),
+      ...(accountNumber !== (account.accountNumber ?? '') && { accountNumber }),
+    }
+    setSaving(true)
+    try {
+      await accountApi.update(account.id, changes)
+      await onSaved()
+      setSaved(true)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -578,26 +693,34 @@ function DetailsForm({ store, account }) {
         <div style={{ color: '#555', fontSize: '11px', marginBottom: '12px' }}>
           Broker ({account.broker}) and currency ({account.currency}) are fixed once trades exist.
         </div>
-        <PrimaryButton type="submit" disabled={!changed}>{saved && !changed ? 'SAVED' : 'SAVE DETAILS'}</PrimaryButton>
+        <PrimaryButton type="submit" disabled={!changed || saving}>{saving ? 'SAVING…' : saved && !changed ? 'SAVED' : 'SAVE DETAILS'}</PrimaryButton>
       </form>
     </Section>
   )
 }
 
-// D-19: the user types what the broker shows; the difference is recorded as a visible correction.
-function CorrectBalanceSheet({ account, figures, onClose }) {
+// D-19: the user types what the broker shows; the server records the difference as a
+// visible correction. The difference shown here is a preview at today's rate.
+function CorrectBalanceSheet({ account, figures, onClose, onSaved }) {
   const { rates, formatUsd } = useCurrency()
   const [amount, setAmount] = useState('')
   const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
   const rate = account.currency === 'USD' ? 1 : rates?.[account.currency]
 
-  const save = e => {
+  const save = async e => {
     e.preventDefault()
     const value = parseAmount(amount)
     if (value === null || value < 0) return setError('Enter the balance your broker shows.')
-    if (!rate) return setError("Exchange rates haven't loaded yet. Try again in a moment.")
-    previewActions.correctBalance(account.id, value / rate, 'Matched to broker statement')
-    onClose()
+    setSaving(true)
+    try {
+      await accountApi.correctBalance(account.id, value)
+      await onSaved()
+      onClose()
+    } catch (err) {
+      setError(err.message)
+      setSaving(false)
+    }
   }
 
   const value = parseAmount(amount)
@@ -614,7 +737,7 @@ function CorrectBalanceSheet({ account, figures, onClose }) {
           <input id="correct-amount" autoFocus value={amount} onChange={e => { setAmount(e.target.value); setError(null) }}
             inputMode="decimal" placeholder={rate ? (figures.balance * rate).toFixed(2) : ''} autoComplete="off" style={inputStyle(Boolean(error))} />
         </Field>
-        <PrimaryButton type="submit">SAVE CORRECTION</PrimaryButton>
+        <PrimaryButton type="submit" disabled={saving}>{saving ? 'SAVING…' : 'SAVE CORRECTION'}</PrimaryButton>
       </form>
     </Sheet>
   )
@@ -625,12 +748,26 @@ function CorrectBalanceSheet({ account, figures, onClose }) {
 function DeleteSheet({ account, title, impact, onClose, onDeleted }) {
   const { formatUsd } = useCurrency()
   const [typed, setTyped] = useState('')
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
   const matches = typed.trim().toLowerCase() === title.toLowerCase()
+
+  const remove = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await accountApi.remove(account.id)
+      await onDeleted()
+    } catch (err) {
+      setError(err.message)
+      setBusy(false)
+    }
+  }
 
   return (
     <Sheet title={`Delete ${title}?`} onClose={onClose}>
       <ul style={listStyle}>
-        <li>Deletes the account, its {impact.trades} trades and {impact.cash} deposits/withdrawals.</li>
+        <li>Deletes the account, its {impact.trades} {impact.trades === 1 ? 'trade' : 'trades'} and its deposits and withdrawals.</li>
         {impact.equity !== 0 && <li>Net worth drops by {formatUsd(impact.equity)}.</li>}
         {impact.trades > 0 && <li>All-time P&L changes by {formatUsd(-impact.pnl, { signed: true })}, and win rates are recalculated without these trades.</li>}
         <li style={{ color: '#ef4444' }}>This can't be undone. To keep the trades, archive instead.</li>
@@ -638,8 +775,9 @@ function DeleteSheet({ account, title, impact, onClose, onDeleted }) {
       <Field label={`TYPE "${title}" TO CONFIRM`} htmlFor="delete-confirm">
         <input id="delete-confirm" value={typed} onChange={e => setTyped(e.target.value)} autoComplete="off" spellCheck={false} style={inputStyle(false)} />
       </Field>
-      <PrimaryButton danger disabled={!matches} onClick={() => { previewActions.deleteAccount(account.id); onDeleted() }}>
-        DELETE PERMANENTLY
+      {error && <div role="alert" style={{ color: '#ef4444', fontSize: '12px', marginBottom: '10px' }}>{error}</div>}
+      <PrimaryButton danger disabled={!matches || busy} onClick={remove}>
+        {busy ? 'DELETING…' : 'DELETE PERMANENTLY'}
       </PrimaryButton>
     </Sheet>
   )

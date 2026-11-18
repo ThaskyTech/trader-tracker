@@ -39,6 +39,11 @@ describe('toTradeDTO', () => {
         const dto = toTradeDTO({ id: 't1', symbol: 'BTCUSDT', lotSize: d('0.015'), entryPrice: d('64201.5'), exitPrice: d('65000'), pnl: d('200'), pnlUsd: d('11.81'), fxRate: d('16.9327') })
         expect(dto).toEqual({ id: 't1', symbol: 'BTCUSDT', lotSize: 0.015, entryPrice: 64201.5, exitPrice: 65000, pnl: 200, pnlUsd: 11.81, fxRate: 16.9327 })
     })
+
+    it("flattens the account's broker onto the trade and drops the nested account", () => {
+        const dto = toTradeDTO({ id: 't1', accountId: 'a1', account: { broker: 'Exness' } })
+        expect(dto).toEqual({ id: 't1', accountId: 'a1', broker: 'Exness' })
+    })
 })
 
 describe('tradeFilterWhere', () => {
@@ -49,6 +54,10 @@ describe('tradeFilterWhere', () => {
     it('filters by direction and by the sign of the USD P&L (break-even matches neither)', () => {
         expect(tradeFilterWhere({ direction: 'SHORT', outcome: 'PROFIT' })).toEqual({ direction: 'SHORT', pnlUsd: { gt: 0 } })
         expect(tradeFilterWhere({ outcome: 'LOSS' })).toEqual({ pnlUsd: { lt: 0 } })
+    })
+
+    it('filters by account (History for one account, D-46)', () => {
+        expect(tradeFilterWhere({ accountId: 'a1', direction: 'LONG' })).toEqual({ accountId: 'a1', direction: 'LONG' })
     })
 })
 

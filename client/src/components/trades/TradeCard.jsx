@@ -1,6 +1,7 @@
 import { formatTradeTime } from '../../utils/format'
 import { formatMoney } from '../../utils/currency'
 import { useCurrency } from '../../context/CurrencyContext'
+import { useAccounts } from '../../context/AccountsContext'
 
 // `day` is the Daily Log's date ('YYYY-MM-DD'). Times on that day show as just
 // the time; a trade opened on an earlier day also shows its date.
@@ -8,6 +9,11 @@ import { useCurrency } from '../../context/CurrencyContext'
 // source, so both are left out instead of repeated on every card (D-45).
 export default function TradeCard({ trade, day, onClick, withinAccount = false }) {
   const { displayCurrency, formatTradePnl } = useCurrency()
+  // The account's title, not just the broker: "Exness" alone doesn't say which Exness
+  // account (D-37). Falls back to the broker while the accounts load.
+  const { byId, titleOf } = useAccounts()
+  const account = byId(trade.accountId)
+  const accountLabel = account ? titleOf(account) : trade.broker
   const isProfit = trade.pnl >= 0
   const isLong = trade.direction === 'LONG'
 
@@ -72,7 +78,7 @@ export default function TradeCard({ trade, day, onClick, withinAccount = false }
           gap: '10px',
           marginBottom: '12px',
         }}>
-          {!withinAccount && <DetailField label="BROKER" value={trade.broker} />}
+          {!withinAccount && <DetailField label="ACCOUNT" value={accountLabel} />}
           <DetailField label="LOT SIZE" value={trade.lotSize.toFixed(2)} />
           <DetailField label="ENTRY" value={formatTradeTime(trade.openedAt, day)} />
           <DetailField label="EXIT" value={formatTradeTime(trade.closedAt, day)} />

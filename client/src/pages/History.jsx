@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import TradeCard from '../components/trades/TradeCard'
 import { tradeApi } from '../api/client'
 import { useCurrency } from '../context/CurrencyContext'
+import { AccountFilterChip } from '../components/accounts/ui'
+import { useAccounts } from '../context/AccountsContext'
 
 // Trades per "page". Bots can log hundreds of trades, so History loads them in
 // chunks instead of all at once.
@@ -42,28 +44,47 @@ export default function History() {
   const requested = searchParams.get('filter')
   const filterKey = requested && Object.hasOwn(FILTERS, requested) ? requested : 'ALL'
 
-  const setFilter = key => setSearchParams(key === 'ALL' ? {} : { filter: key }, { replace: true })
+  // ?account=… from an account's "VIEW ALL" (D-46). Archived accounts count: their trades
+  // stay in History (D-18).
+  // The id from the URL filters straight away; the chip appears once the accounts (for
+  // its title) have loaded.
+  const { byId, titleOf } = useAccounts()
+  const accountParam = searchParams.get('account') || undefined
+  const account = byId(accountParam)
+
+  // Each control changes only its own part of the URL, so the account survives a filter change.
+  const setParams = ({ filter = filterKey, accountId = accountParam }) => setSearchParams({
+    ...(filter !== 'ALL' && { filter }),
+    ...(accountId && { account: accountId }),
+  }, { replace: true })
 
   return (
     <div style={{ paddingBottom: '1.5rem' }}>
 
-      {/* Header */}
+      {/* One title: the old "TRADE HISTORY" eyebrow repeated it, and "All Sessions" said nothing. */}
       <div style={{ padding: '1.25rem 1rem 0' }}>
-        <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1.5px', marginBottom: '4px' }}>
-          TRADE HISTORY
-        </div>
         <div style={{ color: '#fff', fontSize: '20px', fontWeight: '500' }}>
-          All Sessions
+          Trade History
         </div>
       </div>
 
+      {account && <AccountFilterChip account={account} title={titleOf(account)} onClear={() => setParams({ accountId: null })} />}
+
       {/* The key gives each filter fresh state: its own list, totals and paging. */}
-      <HistoryResults key={filterKey} filterKey={filterKey} onFilter={setFilter} />
+      <HistoryResults
+        key={`${filterKey}:${accountParam ?? 'all'}`}
+        filterKey={filterKey}
+        onFilter={filter => setParams({ filter })}
+        accountId={accountParam}
+      />
     </div>
   )
 }
 
-function HistoryResults({ filterKey, onFilter }) {
+// accountId: History for one account. Its cards then leave out the account and source,
+// which every card would repeat (D-45).
+function HistoryResults({ filterKey, onFilter, accountId }) {
+  const withinAccount = Boolean(accountId)
   const navigate = useNavigate()
   const { formatUsd } = useCurrency()
 
@@ -76,7 +97,7 @@ function HistoryResults({ filterKey, onFilter }) {
 
   useEffect(() => {
     let cancelled = false
-    const params = FILTERS[filterKey]
+    const params = { ...FILTERS[filterKey], accountId }
     Promise.all([
       tradeApi.listTrades({ ...params, limit: PAGE_SIZE }),
       tradeApi.getHistorySummary(params),
@@ -89,13 +110,13 @@ function HistoryResults({ filterKey, onFilter }) {
       })
       .catch(err => { if (!cancelled) setError(err.message) })
     return () => { cancelled = true }
-  }, [filterKey])
+  }, [filterKey, accountId])
 
   const loadMore = async () => {
     setLoadingMore(true)
     setLoadMoreError(null)
     try {
-      const page = await tradeApi.listTrades({ ...FILTERS[filterKey], limit: PAGE_SIZE, cursor: nextCursor })
+      const page = await tradeApi.listTrades({ ...FILTERS[filterKey], accountId, limit: PAGE_SIZE, cursor: nextCursor })
       setTrades(current => [...current, ...page.trades])
       setNextCursor(page.nextCursor)
     } catch (err) {
@@ -219,6 +240,7 @@ function HistoryResults({ filterKey, onFilter }) {
               trade={trade}
               day={null}
               onClick={() => navigate(`/trades/${trade.id}/edit`)}
+              withinAccount={withinAccount}
             />
           ))}
         </div>

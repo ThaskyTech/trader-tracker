@@ -11,6 +11,7 @@ import Login from './pages/Login'
 import Signup from './pages/Signup'
 import { AuthProvider } from './context/AuthContext'
 import { CurrencyProvider } from './context/CurrencyContext'
+import { AccountsProvider } from './context/AccountsContext'
 import ProtectedRoute from './components/common/ProtectedRoute'
 
 const AUTH_ROUTES = ['/login', '/signup']
@@ -115,9 +116,11 @@ export default function App() {
   return (
     <AuthProvider>
       <CurrencyProvider>
-        <BrowserRouter>
-          <AppShell />
-        </BrowserRouter>
+        <AccountsProvider>
+          <BrowserRouter>
+            <AppShell />
+          </BrowserRouter>
+        </AccountsProvider>
       </CurrencyProvider>
     </AuthProvider>
   )

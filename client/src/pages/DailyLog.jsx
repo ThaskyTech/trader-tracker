@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import TradeCard from '../components/trades/TradeCard'
 import { tradeApi } from '../api/client'
 import { useCurrency } from '../context/CurrencyContext'
+import { AccountFilterChip } from '../components/accounts/ui'
+import { useAccounts } from '../context/AccountsContext'
 
 const MONTH_NAMES = ['January','February','March','April','May','June',
   'July','August','September','October','November','December']
@@ -16,29 +18,41 @@ function formatDateLabel(dateStr) {
 
 export default function DailyLog() {
   const { date } = useParams()
-  // The key resets loading state when moving straight from one day to another.
-  return <DailyLogInner key={date} date={date} />
+  // ?account=… from a calendar day on an account page (D-46).
+  const [searchParams, setSearchParams] = useSearchParams()
+  // The id from the URL filters straight away; the chip appears once its title is known.
+  const { byId, titleOf } = useAccounts()
+  const accountId = searchParams.get('account') || undefined
+  const account = byId(accountId)
+  const clearAccount = () => setSearchParams({}, { replace: true })
+  // The key resets loading state when moving straight from one day (or account) to another.
+  return (
+    <DailyLogInner
+      key={`${date}:${accountId ?? 'all'}`}
+      date={date}
+      accountId={accountId}
+      account={account}
+      title={account ? titleOf(account) : null}
+      onClearAccount={clearAccount}
+    />
+  )
 }
 
-function DailyLogInner({ date }) {
+function DailyLogInner({ date, accountId, account, title, onClearAccount }) {
   const navigate = useNavigate()
   const [trades, setTrades] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
     let cancelled = false
-    tradeApi.getTradesByDay(date)
+    tradeApi.getTradesByDay(date, accountId)
       .then(data => { if (!cancelled) setTrades(data.trades) })
       .catch(err => { if (!cancelled) setError(err.message) })
     return () => { cancelled = true }
-  }, [date])
+  }, [date, accountId])
 
-  const addTrade = () => navigate(`/trades/new?date=${date}`)
-
-  const handleExport = () => {
-    // CSV export logic goes here later
-    console.log('export CSV for', date)
-  }
+  // Adding from a filtered day locks the new trade to that account, like the account page.
+  const addTrade = () => navigate(`/trades/new?date=${date}${account ? `&account=${account.id}` : ''}`)
 
   return (
     <div style={{ paddingBottom: '1.5rem' }}>
@@ -70,6 +84,12 @@ function DailyLogInner({ date }) {
         <button onClick={addTrade} style={outlineButtonStyle}>+ ADD</button>
       </div>
 
+      {account && (
+        <div style={{ marginBottom: '0.75rem', marginTop: '-0.75rem' }}>
+          <AccountFilterChip account={account} title={title} onClear={onClearAccount} />
+        </div>
+      )}
+
       {error && (
         <div style={{
           margin: '0 1rem',
@@ -88,14 +108,15 @@ function DailyLogInner({ date }) {
         <div style={{ margin: '0 1rem', color: '#555', fontSize: '12px', letterSpacing: '1px' }}>LOADING...</div>
       )}
 
-      {trades && <DayContent trades={trades} date={date} onAdd={addTrade} onExport={handleExport} navigate={navigate} />}
+      {trades && <DayContent trades={trades} date={date} navigate={navigate} withinAccount={Boolean(accountId)} />}
     </div>
   )
 }
 
-function DayContent({ trades, date, onAdd, onExport, navigate }) {
+function DayContent({ trades, date, navigate, withinAccount }) {
   const { formatUsd } = useCurrency()
 
+  // No second "log a trade" button here: the header's + ADD is right above it.
   if (trades.length === 0) {
     return (
       <div style={{
@@ -105,8 +126,7 @@ function DayContent({ trades, date, onAdd, onExport, navigate }) {
         padding: '2rem 1rem',
         textAlign: 'center',
       }}>
-        <div style={{ color: '#555', fontSize: '13px', marginBottom: '16px' }}>No trades closed on this day.</div>
-        <button onClick={onAdd} style={outlineButtonStyle}>LOG A TRADE</button>
+        <div style={{ color: '#555', fontSize: '13px' }}>No trades closed on this day.</div>
       </div>
     )
   }
@@ -130,7 +150,7 @@ function DayContent({ trades, date, onAdd, onExport, navigate }) {
         border: '1px solid #16a34a33',
       }}>
         <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1.5px', marginBottom: '8px' }}>
-          AGGREGATE DAILY PERFORMANCE
+          DAY P/L
         </div>
         <div style={{
           color: isProfit ? '#22c55e' : '#ef4444',
@@ -162,30 +182,9 @@ function DayContent({ trades, date, onAdd, onExport, navigate }) {
         </div>
       </div>
 
-      {/* Trade list header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        margin: '1.25rem 1rem 0.75rem',
-      }}>
-        <span style={{ color: '#888', fontSize: '12px', letterSpacing: '0.5px' }}>
-          TRADE EXECUTION LOG ({trades.length})
-        </span>
-        <button
-          onClick={onExport}
-          style={{
-            background: 'none',
-            border: '1px solid #333',
-            borderRadius: '6px',
-            color: '#888',
-            fontSize: '11px',
-            padding: '5px 10px',
-            cursor: 'pointer',
-          }}
-        >
-          CSV Export
-        </button>
+      {/* No CSV button until export exists (backlog): it only logged to the console. */}
+      <div style={{ margin: '1.25rem 1rem 0.75rem', color: '#888', fontSize: '12px', letterSpacing: '0.5px' }}>
+        TRADES ({trades.length})
       </div>
 
       {/* Trade cards — tap one to edit it */}
@@ -196,6 +195,7 @@ function DayContent({ trades, date, onAdd, onExport, navigate }) {
             trade={trade}
             day={date}
             onClick={() => navigate(`/trades/${trade.id}/edit`)}
+            withinAccount={withinAccount}
           />
         ))}
       </div>

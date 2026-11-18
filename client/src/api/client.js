@@ -129,19 +129,40 @@ function toQueryString(params){
 // For endpoints that group by local day or month, so they need the timezone.
 const query = (params) => toQueryString({ tz: timeZone(), ...params })
 
+// accountId is optional on the summaries, day and list calls: set, they cover one
+// account (its page, or History/Daily Log filtered to it, D-46).
 export const tradeApi = {
-    getMonthlySummary: (year, month) => api.get(`/trades/summary/month${query({ year, month })}`),
-    getCalendarSummary: (year, month) => api.get(`/trades/summary/calendar${query({ year, month })}`),
-    // filters: { direction: 'LONG' | 'SHORT', outcome: 'PROFIT' | 'LOSS' }, all optional
+    getMonthlySummary: (year, month, accountId) => api.get(`/trades/summary/month${query({ year, month, accountId })}`),
+    getCalendarSummary: (year, month, accountId) => api.get(`/trades/summary/calendar${query({ year, month, accountId })}`),
+    // filters: { accountId, direction: 'LONG' | 'SHORT', outcome: 'PROFIT' | 'LOSS' }, all optional
     getHistorySummary: (filters = {}) => api.get(`/trades/summary/history${toQueryString(filters)}`),
     // date is 'YYYY-MM-DD'
-    getTradesByDay: (date) => api.get(`/trades/day/${date}${query({})}`),
-    // Newest first. params: { limit, cursor, direction, outcome }, all optional.
+    getTradesByDay: (date, accountId) => api.get(`/trades/day/${date}${query({ accountId })}`),
+    // Newest first. params: { limit, cursor, accountId, direction, outcome }, all optional.
     // Returns { trades, nextCursor }; pass nextCursor back to get the next page.
     listTrades: (params = {}) => api.get(`/trades${toQueryString(params)}`),
-    getRecentTrades: (limit) => api.get(`/trades${toQueryString({ limit })}`),
+    getRecentTrades: (limit, accountId) => api.get(`/trades${toQueryString({ limit, accountId })}`),
     getTrade: (id) => api.get(`/trades/${encodeURIComponent(id)}`),
     createTrade: (tradeData) => api.post('/trades', tradeData),
     updateTrade: (id, tradeData) => api.put(`/trades/${id}`, tradeData),
     deleteTrade: (id) => api.delete(`/trades/${id}`)
+}
+
+// Accounts (D-16 to D-19, D-27). Each account comes with `figures` (balance, equity,
+// this month's summary...), calculated by the server when read. tz decides "this month".
+const accountPath = (id, rest = '') => `/accounts/${encodeURIComponent(id)}${rest}`
+export const accountApi = {
+    list: () => api.get(`/accounts${query({})}`),
+    get: (id) => api.get(accountPath(id, query({}))),
+    create: (data) => api.post(`/accounts${query({})}`, data),
+    update: (id, changes) => api.patch(accountPath(id, query({})), changes),
+    archive: (id) => api.post(accountPath(id, `/archive${query({})}`)),
+    restore: (id) => api.post(accountPath(id, `/restore${query({})}`)),
+    remove: (id) => api.delete(accountPath(id)),
+    listCash: (id) => api.get(accountPath(id, '/cash')),
+    // { type: 'DEPOSIT' | 'WITHDRAWAL', amount (positive), currency, occurredAt, note }
+    addCash: (id, movement) => api.post(accountPath(id, '/cash'), movement),
+    // balance: what the broker shows, in the account's currency (D-19)
+    correctBalance: (id, balance) => api.post(accountPath(id, '/balance-correction'), { balance }),
+    equity: (id, days = 90) => api.get(accountPath(id, `/equity${query({ days })}`)),
 }

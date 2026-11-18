@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useCurrency } from '../../context/CurrencyContext'
+import { useAccounts } from '../../context/AccountsContext'
 import { toLocalDateString } from '../../utils/tradeForm'
 
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -18,6 +19,9 @@ function formatWhen(iso) {
 export default function OperationsLog({ trades }) {
   const navigate = useNavigate()
   const { formatTradePnl } = useCurrency()
+  // Account title rather than the bare broker (D-37); the broker until accounts load.
+  const { byId, titleOf } = useAccounts()
+  const accountLabel = trade => { const a = byId(trade.accountId); return a ? titleOf(a) : trade.broker }
 
   return (
     <div style={{
@@ -26,21 +30,9 @@ export default function OperationsLog({ trades }) {
       borderRadius: '12px',
       padding: '1rem',
     }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: '12px',
-      }}>
-        <span style={{ color: '#22c55e', fontSize: '10px', letterSpacing: '1.5px' }}>
-          RECENT_EXECUTIONS
-        </span>
-        <div style={{
-          width: '7px',
-          height: '7px',
-          borderRadius: '50%',
-          backgroundColor: '#22c55e',
-        }} />
+      {/* Plain label like the other cards; the green dot beside it meant nothing. */}
+      <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1.5px', marginBottom: '12px' }}>
+        RECENT TRADES
       </div>
 
       {trades === undefined && <div style={{ color: '#444', fontSize: '11px' }}>LOADING...</div>}
@@ -76,7 +68,7 @@ export default function OperationsLog({ trades }) {
                     {trade.direction}{' '}
                   </span>
                   <span style={{ color: '#888', fontSize: '11px' }}>
-                    {trade.symbol} · {trade.broker}
+                    {trade.symbol} · {accountLabel(trade)}
                   </span>
                 </div>
                 <span style={{

@@ -86,3 +86,18 @@ export function parseDateString(value){
     if(check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null
     return { year, month, day }
 }
+
+// The last `count` local calendar days up to and including today, oldest first:
+// [{ date: 'YYYY-MM-DD', start, end }], each a [start, end) range. Used by the equity chart.
+export function lastLocalDays(count, timeZone, now = new Date()){
+    const today = getLocalParts(now, timeZone)
+    const days = []
+    for(let back = count - 1; back >= 0; back--){
+        // Date.UTC rolls day 0 or -3 back into the previous month, so this works across months.
+        const d = new Date(Date.UTC(today.year, today.month - 1, today.day - back))
+        const year = d.getUTCFullYear(), month = d.getUTCMonth() + 1, day = d.getUTCDate()
+        const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+        days.push({ date, ...localDayRange(year, month, day, timeZone) })
+    }
+    return days
+}

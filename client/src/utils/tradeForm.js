@@ -6,9 +6,6 @@
 
 import { CURRENCY_CODES } from './currency'
 
-// Suggestions for the broker field. The field stays free text, so any broker works.
-export const BROKERS = ['Binance', 'Exness', 'FP Markets', 'Pepperstone', 'Interactive Brokers']
-
 // Same limits the server enforces (server/src/validators/trade.schema.js).
 const MAX_AMOUNT = 1e12
 const CLOCK_SKEW_MS = 5 * 60 * 1000
@@ -53,7 +50,8 @@ export function emptyForm(dateString, currency = 'USD', now = new Date()){
     return {
         symbol: '',
         direction: 'LONG',
-        broker: '',
+        // The account the trade was on (D-37); the broker name comes from the account.
+        accountId: '',
         lotSize: '',
         entryPrice: '',
         exitPrice: '',
@@ -72,7 +70,7 @@ export function tradeToForm(trade){
     return {
         symbol: trade.symbol,
         direction: trade.direction,
-        broker: trade.broker,
+        accountId: trade.accountId,
         lotSize: String(trade.lotSize),
         entryPrice: String(trade.entryPrice),
         exitPrice: String(trade.exitPrice),
@@ -100,14 +98,12 @@ function checkAmount(raw, { allowZero = false } = {}){
 export function validateForm(form, now = new Date()){
     const errors = {}
     const symbol = form.symbol.trim()
-    const broker = form.broker.trim()
     const notes = form.notes.trim()
 
     if(!symbol) errors.symbol = 'Required, e.g. EURUSD.'
     else if(symbol.length > 30) errors.symbol = 'At most 30 characters.'
 
-    if(!broker) errors.broker = 'Required.'
-    else if(broker.length > 50) errors.broker = 'At most 50 characters.'
+    if(!form.accountId) errors.accountId = 'Choose the account this trade was on.'
 
     const lotSize = checkAmount(form.lotSize)
     const entryPrice = checkAmount(form.entryPrice)
@@ -134,7 +130,7 @@ export function validateForm(form, now = new Date()){
         payload: {
             symbol: symbol.toUpperCase(),
             direction: form.direction,
-            broker,
+            accountId: form.accountId,
             lotSize: lotSize.value,
             entryPrice: entryPrice.value,
             exitPrice: exitPrice.value,

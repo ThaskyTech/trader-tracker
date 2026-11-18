@@ -16,6 +16,7 @@ model User {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   trades          Trade[]
+  accounts        Account[]
   refreshTokens   RefreshToken[]
 
   @@map("users")
@@ -59,9 +60,12 @@ model Trade {
   id                String      @id @default(uuid())
   userId            String 
   user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Every trade belongs to one account (D-16). The broker name lives on the account.
+  // Deleting an account permanently deletes its trades (D-18); archiving keeps them.
+  accountId         String
+  account           Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
   symbol            String
   direction         Direction 
-  broker            String
   // Money and quantities are exact decimals, not floats, so sums never drift
   // (0.1 + 0.2 is exactly 0.3). 8 decimal places covers crypto prices and lot sizes.
   lotSize           Decimal       @db.Decimal(20, 8)
@@ -85,6 +89,111 @@ model Trade {
   @@index([userId, openedAt])
   // P&L is realised when a trade closes, so the calendar and summaries group by closedAt.
   @@index([userId, closedAt])
+  @@index([accountId, closedAt])
+}
+
+// --- Accounts (D-16 to D-19, D-27, D-47) ---
+
+// How an account connects (D-12). Only MT5 and MANUAL can be created until the sync
+// adapters exist (roadmap 7-8); the others are here so the list matches the client.
+enum AccountProvider {
+  BINANCE
+  CTRADER
+  IBKR
+  MT5
+  MANUAL
+}
+
+// One per account, never mixed (D-17).
+enum AccountCategory {
+  CRYPTO
+  FOREX
+  STOCKS
+}
+
+// Part of the account's title: "Exness · Bot" (D-47).
+enum TradingStyle {
+  BOT
+  SCALPING
+  DAY
+  SWING
+  LONG_TERM
+}
+
+// Synced accounts only (D-14). Null for manual accounts, which don't sync.
+enum SyncStatus {
+  OK
+  ERROR
+  RECONNECT
+}
+
+model Account {
+  id                String          @id @default(uuid())
+  userId            String
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider          AccountProvider
+  broker            String
+  // Required when adding an account. Null only on accounts the 6b migration created
+  // from existing trades, until the owner picks a style (D-47).
+  style             TradingStyle?
+  category          AccountCategory
+  // The account's own currency at the broker. Fixed once the account has trades.
+  currency          Currency
+  // Last 4 digits, to tell apart two accounts with the same broker and style (D-47).
+  accountNumber     String?
+  // D-19: balance = opening balance + P&L of trades closed since openingDate + cash
+  // movements. Stored like a trade's P&L (D-22): native amount, rate, USD value.
+  openingBalance    Decimal         @default(0) @db.Decimal(20, 8)
+  openingFxRate     Decimal         @default(1) @db.Decimal(20, 10)
+  openingBalanceUsd Decimal         @default(0) @db.Decimal(20, 8)
+  openingDate       DateTime
+  // Synced accounts (roadmap 7-8). Credentials are AES-256-GCM encrypted (D-15) and
+  // never sent to the browser; credentialHint is the masked version that is.
+  credentialsEncrypted String?
+  credentialHint    String?
+  syncStatus        SyncStatus?
+  lastSyncedAt      DateTime?
+  lastError         String?
+  // Archived accounts leave net worth and stop syncing; their trades stay (D-18).
+  archivedAt        DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  trades            Trade[]
+  cashMovements     CashMovement[]
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+// D-27. ADJUSTMENT is a "Correct balance" entry (D-19): visible, never a silent overwrite.
+enum CashMovementType {
+  DEPOSIT
+  WITHDRAWAL
+  ADJUSTMENT
+}
+
+enum RecordOrigin {
+  MANUAL
+  SYNCED
+}
+
+model CashMovement {
+  id          String           @id @default(uuid())
+  accountId   String
+  account     Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type        CashMovementType
+  // Signed: money in is positive, money out negative. Same pattern as a trade (D-22).
+  amount      Decimal          @db.Decimal(20, 8)
+  currency    Currency
+  fxRate      Decimal          @db.Decimal(20, 10)
+  amountUsd   Decimal          @db.Decimal(20, 8)
+  occurredAt  DateTime
+  note        String?
+  origin      RecordOrigin     @default(MANUAL)
+  createdAt   DateTime         @default(now())
+
+  @@index([accountId, occurredAt])
+  @@map("cash_movements")
 }
 
 // Daily exchange rates from the Frankfurter API (European Central Bank data), saved

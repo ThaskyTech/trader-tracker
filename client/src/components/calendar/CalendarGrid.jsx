@@ -13,7 +13,7 @@ const pad = n => String(n).padStart(2, '0')
 // cards follow the same month. days: { 1: 840, 2: -1205, ... } in USD, or
 // undefined while loading.
 // onDayClick: optional (dateKey) => void. Defaults to opening that day's Daily Log;
-// pass null to make the days not clickable (the account preview does this).
+// pass null to make the days not clickable.
 export default function CalendarGrid({ view, days, onPrev, onNext, onDayClick }) {
   const navigate = useNavigate()
   const { formatUsd } = useCurrency()

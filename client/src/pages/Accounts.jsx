@@ -1,61 +1,109 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import WalletStack from '../components/accounts/WalletStack'
-import { PreviewBanner, Section, OutlineButton } from '../components/accounts/ui'
-import { CATEGORIES, CATEGORY_KEYS, accountTitle } from '../utils/accounts'
+import { Section, OutlineButton } from '../components/accounts/ui'
+import { CATEGORIES, CATEGORY_KEYS } from '../utils/accounts'
 import { useCurrency } from '../context/CurrencyContext'
-import {
-  useAccountsPreview, previewActions, activeAccounts, archivedAccounts,
-  accountFigures, accountTrades,
-} from '../preview/accountsPreview'
+import { useAccounts, netWorthOf } from '../context/AccountsContext'
+import { accountApi } from '../api/client'
 
-// The Accounts tab (D-16, D-46). Runs on sample data until roadmap step 6c.
+// No accounts yet (or all archived): one message and one action, instead of a $0 net
+// worth, an empty bar and 0% pills (D-46).
+function EmptyWallet({ hasArchived, onAdd }) {
+  return (
+    <div style={{
+      margin: '1rem', padding: '2rem 1.25rem', borderRadius: '16px', textAlign: 'center',
+      border: '1px dashed #2a2a2a',
+    }}>
+      <div style={{ color: '#e5e7eb', fontSize: '15px', fontWeight: 500, marginBottom: '8px' }}>
+        {hasArchived ? 'No active accounts' : 'Add your first account'}
+      </div>
+      <div style={{ color: '#666', fontSize: '12px', lineHeight: 1.6, marginBottom: '18px' }}>
+        {hasArchived
+          ? 'Restore one from the archived list below, or add a new one.'
+          : 'Connect Binance, cTrader or IBKR, or track any broker by hand. Your net worth is the total of your accounts.'}
+      </div>
+      <OutlineButton color="#22c55e" onClick={onAdd} style={{ padding: '10px 20px' }}>+ ADD ACCOUNT</OutlineButton>
+    </div>
+  )
+}
+
+// The Accounts tab (D-16, D-46).
 export default function Accounts() {
   const navigate = useNavigate()
   const { formatUsd } = useCurrency()
-  const store = useAccountsPreview()
+  const { accounts, active: activeList, archived, error, titleOf, refresh } = useAccounts()
 
   // Category filter in the URL, like History's, so coming back from an account keeps it.
   const [searchParams, setSearchParams] = useSearchParams()
-  const requested = searchParams.get('category')
-  const category = requested && Object.hasOwn(CATEGORIES, requested) ? requested : null
   const setCategory = key => setSearchParams(key ? { category: key } : {}, { replace: true })
 
-  const active = activeAccounts(store).map(account => ({
-    account,
-    title: accountTitle(account, store.accounts),
-    figures: accountFigures(store, account),
-  }))
-  const netWorth = active.reduce((sum, i) => sum + i.figures.equity, 0)
+  const active = activeList.map(account => ({ account, title: titleOf(account), figures: account.figures }))
+  const netWorth = netWorthOf(activeList)
+
+  // Equity per category, for the allocation bar and the filter pills. Only categories
+  // the user actually has: a "STOCKS 0%" pill would filter to nothing (D-46).
+  const byCategory = CATEGORY_KEYS
+    .filter(key => active.some(i => i.account.category === key))
+    .map(key => {
+      const total = active.filter(i => i.account.category === key).reduce((sum, i) => sum + i.figures.equity, 0)
+      return { key, total, share: netWorth > 0 ? (total / netWorth) * 100 : 0 }
+    })
+  // With one category, the bar is a single solid colour and the filter has nothing to
+  // narrow, so both are hidden.
+  const showSplit = byCategory.length > 1
+
+  // A category from the URL that no longer has accounts (e.g. its last one was archived) is ignored.
+  const requested = searchParams.get('category')
+  const category = showSplit && byCategory.some(c => c.key === requested) ? requested : null
+
   const items = active
     .map(i => ({ ...i, share: netWorth > 0 ? (i.figures.equity / netWorth) * 100 : 0 }))
     .filter(i => !category || i.account.category === category)
 
-  // Equity per category, for the allocation bar and the filter pills.
-  const byCategory = CATEGORY_KEYS.map(key => {
-    const total = active.filter(i => i.account.category === key).reduce((sum, i) => sum + i.figures.equity, 0)
-    return { key, total, share: netWorth > 0 ? (total / netWorth) * 100 : 0 }
-  })
+  const heading = (
+    <div style={{ padding: '1.25rem 1rem 0' }}>
+      <div style={{ color: '#fff', fontSize: '20px', fontWeight: 500 }}>Your Wallet</div>
+    </div>
+  )
+
+  if (accounts === null) {
+    return (
+      <div style={{ paddingBottom: '1.5rem' }}>
+        {heading}
+        {error
+          ? <LoadError message={error} onRetry={refresh} />
+          : <div style={{ margin: '1rem', color: '#555', fontSize: '12px', letterSpacing: '1px' }}>LOADING...</div>}
+      </div>
+    )
+  }
+
+  if (active.length === 0) {
+    return (
+      <div style={{ paddingBottom: '1.5rem' }}>
+        {heading}
+        <EmptyWallet hasArchived={archived.length > 0} onAdd={() => navigate('/accounts/new')} />
+        <ArchivedList archived={archived} titleOf={titleOf} onRestored={refresh} />
+      </div>
+    )
+  }
 
   return (
     <div style={{ paddingBottom: '1.5rem' }}>
       {/* Adding an account lives only in the tile under the stack, so there's one way in. */}
       {/* No "ACCOUNTS" eyebrow: it repeated the bottom-nav tab the user just tapped. */}
-      <div style={{ padding: '1.25rem 1rem 0' }}>
-        <div style={{ color: '#fff', fontSize: '20px', fontWeight: 500 }}>Your Wallet</div>
-      </div>
-
-      <PreviewBanner />
+      {heading}
 
       {/* Net worth and how it splits across categories */}
       <Section>
         <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1.5px', marginBottom: '6px' }}>NET WORTH</div>
         <div style={{ color: '#fff', fontSize: '28px', fontWeight: 600, letterSpacing: '-1px' }}>{formatUsd(netWorth)}</div>
         <div style={{ color: '#555', fontSize: '11px', marginTop: '4px' }}>
-          Equity across {active.length} {active.length === 1 ? 'account' : 'accounts'}, including open positions
+          {/* "including open positions" returns with synced accounts (roadmap 7); manual ones have none. */}
+          Equity across {active.length} {active.length === 1 ? 'account' : 'accounts'}
         </div>
 
-        {netWorth > 0 && (
+        {showSplit && netWorth > 0 && (
           <div aria-hidden style={{ display: 'flex', gap: '2px', height: '8px', marginTop: '14px', borderRadius: '4px', overflow: 'hidden' }}>
             {byCategory.filter(c => c.total > 0).map(c => (
               <div key={c.key} style={{ flex: c.total, backgroundColor: CATEGORIES[c.key].color }} />
@@ -64,7 +112,7 @@ export default function Accounts() {
         )}
 
         {/* Legend doubling as the category filter */}
-        <div role="radiogroup" aria-label="Filter by category" style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
+        {showSplit && <div role="radiogroup" aria-label="Filter by category" style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
           <FilterPill active={!category} onClick={() => setCategory(null)} label="ALL" />
           {byCategory.map(c => (
             <FilterPill
@@ -76,21 +124,15 @@ export default function Accounts() {
               detail={`${c.share.toFixed(0)}%`}
             />
           ))}
-        </div>
+        </div>}
       </Section>
 
       <div style={{ padding: '1rem 1rem 0' }}>
-        {items.length > 0 ? (
-          <WalletStack
-            items={items}
-            onOpen={id => navigate(`/accounts/${id}`)}
-            onAddTrade={id => navigate(`/trades/new?account=${id}`)}
-          />
-        ) : (
-          <div style={{ color: '#444', fontSize: '12px', textAlign: 'center', padding: '2rem 0', letterSpacing: '0.5px' }}>
-            {category ? `NO ${CATEGORIES[category].label.toUpperCase()} ACCOUNTS` : 'NO ACCOUNTS YET'}
-          </div>
-        )}
+        <WalletStack
+          items={items}
+          onOpen={id => navigate(`/accounts/${id}`)}
+          onAddTrade={id => navigate(`/trades/new?account=${id}`)}
+        />
 
         <button
           type="button"
@@ -105,7 +147,19 @@ export default function Accounts() {
         </button>
       </div>
 
-      <ArchivedList store={store} />
+      <ArchivedList archived={archived} titleOf={titleOf} onRestored={refresh} />
+    </div>
+  )
+}
+
+function LoadError({ message, onRetry }) {
+  return (
+    <div role="alert" style={{
+      margin: '1rem', padding: '10px 12px', borderRadius: '8px', fontSize: '12px', lineHeight: 1.5,
+      color: '#ef4444', backgroundColor: '#ef444411', border: '1px solid #ef444433',
+    }}>
+      Couldn't load your accounts: {message}
+      <div><OutlineButton color="#ef4444" onClick={onRetry} style={{ marginTop: '8px' }}>TRY AGAIN</OutlineButton></div>
     </div>
   )
 }
@@ -134,11 +188,25 @@ function FilterPill({ active, onClick, label, detail, color }) {
 }
 
 // Archived accounts (D-18): out of net worth, trades kept, can be restored.
-function ArchivedList({ store }) {
+function ArchivedList({ archived, titleOf, onRestored }) {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
-  const archived = archivedAccounts(store)
+  const [restoring, setRestoring] = useState(null)
+  const [restoreError, setRestoreError] = useState(null)
   if (archived.length === 0) return null
+
+  const restore = async id => {
+    setRestoring(id)
+    setRestoreError(null)
+    try {
+      await accountApi.restore(id)
+      await onRestored()
+    } catch (err) {
+      setRestoreError(err.message)
+    } finally {
+      setRestoring(null)
+    }
+  }
 
   return (
     <Section
@@ -151,6 +219,7 @@ function ArchivedList({ store }) {
           Not counted in net worth. Their trades still count in History, P&L and win rate.
         </div>
       )}
+      {restoreError && <div role="alert" style={{ color: '#ef4444', fontSize: '12px', marginBottom: '8px' }}>{restoreError}</div>}
       {open && archived.map(account => (
         <div key={account.id} style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
@@ -159,12 +228,14 @@ function ArchivedList({ store }) {
           {/* Opens the account, where it can also be deleted permanently */}
           <button type="button" onClick={() => navigate(`/accounts/${account.id}`)}
             style={{ minWidth: 0, flex: 1, textAlign: 'left', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'monospace' }}>
-            <span style={{ display: 'block', color: '#ccc', fontSize: '13px' }}>{accountTitle(account, store.accounts)} ›</span>
+            <span style={{ display: 'block', color: '#ccc', fontSize: '13px' }}>{titleOf(account)} ›</span>
             <span style={{ display: 'block', color: '#555', fontSize: '11px', marginTop: '3px' }}>
-              {accountTrades(store, account.id).length} trades kept
+              {account.figures.tradeCount} {account.figures.tradeCount === 1 ? 'trade' : 'trades'} kept
             </span>
           </button>
-          <OutlineButton color="#22c55e" onClick={() => previewActions.restoreAccount(account.id)}>RESTORE</OutlineButton>
+          <OutlineButton color="#22c55e" onClick={() => restore(account.id)} disabled={restoring !== null}>
+            {restoring === account.id ? 'RESTORING…' : 'RESTORE'}
+          </OutlineButton>
         </div>
       ))}
     </Section>

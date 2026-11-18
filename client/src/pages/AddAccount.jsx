@@ -1,16 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PreviewBanner, Field, PrimaryButton, StylePicker } from '../components/accounts/ui'
+import { Field, PrimaryButton, StylePicker } from '../components/accounts/ui'
 import { inputStyle } from '../components/accounts/styles'
 import WalletCard from '../components/accounts/WalletCard'
-import { CATEGORIES, CATEGORY_KEYS, PROVIDERS, PROVIDER_KEYS, accountTitle, titleClashError } from '../utils/accounts'
+import { CATEGORIES, CATEGORY_KEYS, CREATABLE_PROVIDERS, PROVIDERS, PROVIDER_KEYS, accountTitle, titleClashError } from '../utils/accounts'
 import { CURRENCIES } from '../utils/currency'
 import { parseAmount } from '../utils/tradeForm'
-import { useCurrency } from '../context/CurrencyContext'
-import { useAccountsPreview, previewActions, accountFigures } from '../preview/accountsPreview'
+import { useAccounts } from '../context/AccountsContext'
+import { accountApi } from '../api/client'
 
 // Add-account wizard (D-16): type -> connect (automatic types only) -> details -> verify -> done.
-// On sample data: "connecting" and "verifying" are simulated, nothing leaves the browser.
+// Only MT5 and manual accounts can be created until the sync adapters exist (roadmap
+// 7-8). The connect screens for the automatic types are kept for then.
 export default function AddAccount() {
   const navigate = useNavigate()
   const [step, setStep] = useState('type')
@@ -57,8 +58,6 @@ export default function AddAccount() {
         </div>
       )}
 
-      <PreviewBanner />
-
       <div style={{ padding: '1rem' }}>
         {step === 'type' && (
           <TypeStep onPick={key => { setProvider(key); setCredentials(null); setDetails(null); setStep(PROVIDERS[key].sync === 'auto' ? 'connect' : 'details') }} />
@@ -71,11 +70,9 @@ export default function AddAccount() {
         )}
         {step === 'verify' && (
           <VerifyStep
-            provider={provider}
-            credentials={credentials}
             details={details}
             onDone={r => { setResult(r); setStep('done') }}
-            onFail={() => setStep('connect')}
+            onFail={() => setStep('details')}
           />
         )}
         {step === 'done' && result && <DoneStep result={result} />}
@@ -95,15 +92,18 @@ function TypeStep({ onPick }) {
       {PROVIDER_KEYS.map(key => {
         const p = PROVIDERS[key]
         const auto = p.sync === 'auto'
+        // Shown but not selectable yet, so it's clear they're planned (roadmap 7-8).
+        const available = CREATABLE_PROVIDERS.includes(key)
         return (
           <button
             key={key}
             type="button"
             onClick={() => onPick(key)}
+            disabled={!available}
             style={{
               textAlign: 'left', backgroundColor: '#141414', border: '1px solid #222', borderRadius: '12px',
-              padding: '14px', cursor: 'pointer', fontFamily: 'monospace', color: '#e5e7eb',
-              display: 'flex', alignItems: 'center', gap: '12px',
+              padding: '14px', cursor: available ? 'pointer' : 'default', fontFamily: 'monospace', color: '#e5e7eb',
+              display: 'flex', alignItems: 'center', gap: '12px', opacity: available ? 1 : 0.45,
             }}
           >
             <span aria-hidden style={{
@@ -118,7 +118,7 @@ function TypeStep({ onPick }) {
                   color: auto ? '#22c55e' : '#9ca3af',
                   border: `1px solid ${auto ? '#16a34a55' : '#33333388'}`,
                 }}>
-                  {auto ? 'AUTOMATIC' : 'MANUAL'}
+                  {!available ? 'SOON' : auto ? 'AUTOMATIC' : 'MANUAL'}
                 </span>
               </span>
               <span style={{ display: 'block', color: '#777', fontSize: '11px', marginTop: '5px', lineHeight: 1.4 }}>{p.blurb}</span>
@@ -256,8 +256,8 @@ function CTraderConnect({ initial, onNext }) {
 
 function DetailsStep({ provider, credentials, initial, onNext }) {
   const p = PROVIDERS[provider]
-  const store = useAccountsPreview()
-  const { rates } = useCurrency()
+  const { accounts: loaded } = useAccounts()
+  const accounts = loaded ?? []
   const presetBroker = p.broker ?? credentials?.broker ?? ''
   const lockCurrency = provider === 'BINANCE'
 
@@ -273,7 +273,7 @@ function DetailsStep({ provider, credentials, initial, onNext }) {
   const set = (key, value) => { setForm(f => ({ ...f, [key]: value })); setErrors(e => ({ ...e, [key]: undefined })) }
 
   const candidate = { id: null, broker: form.broker.trim(), style: form.style, accountNumber: form.accountNumber.trim() }
-  const previewTitle = candidate.broker && form.style ? accountTitle(candidate, [...store.accounts, candidate]) : null
+  const previewTitle = candidate.broker && form.style ? accountTitle(candidate, [...accounts, candidate]) : null
 
   const submit = e => {
     e.preventDefault()
@@ -284,23 +284,23 @@ function DetailsStep({ provider, credentials, initial, onNext }) {
     if (!form.style) found.style = 'Pick how this account is traded.'
     if (candidate.accountNumber && !/^\d{4}$/.test(candidate.accountNumber)) found.accountNumber = 'Exactly 4 digits.'
     else if (broker && form.style) {
-      const clash = titleClashError(candidate, store.accounts)
+      const clash = titleClashError(candidate, accounts)
       if (clash) found.accountNumber = clash
     }
-    let openingBalanceUsd
+    // In the account's own currency; the server stores it with today's rate (D-22).
+    let openingBalance = 0
     if (p.sync === 'manual') {
       const amount = parseAmount(form.openingBalance)
       if (amount === null) found.openingBalance = 'Enter the balance as it is today.'
       else if (amount < 0) found.openingBalance = "A balance can't be negative."
-      else {
-        const rate = form.currency === 'USD' ? 1 : rates?.[form.currency]
-        if (!rate) found.openingBalance = "Exchange rates haven't loaded yet. Try again in a moment."
-        else openingBalanceUsd = amount / rate
-      }
+      else openingBalance = amount
     }
     setErrors(found)
     if (Object.keys(found).length > 0) return
-    onNext({ form, draft: { provider, broker, style: form.style, category: form.category, currency: form.currency, accountNumber: candidate.accountNumber, openingBalanceUsd } })
+    onNext({ form, draft: {
+      provider, broker, style: form.style, category: form.category, currency: form.currency,
+      accountNumber: candidate.accountNumber || null, openingBalance,
+    } })
   }
 
   return (
@@ -375,90 +375,52 @@ function DetailsStep({ provider, credentials, initial, onNext }) {
   )
 }
 
-// --- Step 4: verify (simulated) ---
+// --- Step 4: create ---
 
-// Binance is Futures only (D-12). Money moving into and out of the futures wallet
-// shows in Binance as transfers, which become this account's deposits/withdrawals (D-27).
-const CHECKS = {
-  BINANCE: ['Checking the key is read-only', 'Reading futures balance and positions', 'Importing closed P&L', 'Importing transfers in and out'],
-  CTRADER: ['Checking access to the account', 'Reading balance and open positions', 'Importing closed trades', 'Importing deposits and withdrawals'],
-  IBKR: ['Running your Flex query', 'Reading holdings', 'Importing trades', 'Importing cash transactions'],
-}
-
-function VerifyStep({ provider, credentials, details, onDone, onFail }) {
-  const checks = CHECKS[provider] ?? ['Creating the account']
-  const [done, setDone] = useState(0)
-  // Preview only: a Binance key containing "trade" acts like a key with trading
-  // enabled, to show how a rejected key looks.
-  const rejects = provider === 'BINANCE' && /trade/i.test(credentials?.apiKey ?? '')
-  const [failed, setFailed] = useState(false)
+// Saves the account. A server-side refusal (e.g. a title clash found since the details
+// step) goes back to the details with the message.
+function VerifyStep({ details, onDone, onFail }) {
+  const { refresh } = useAccounts()
+  const [error, setError] = useState(null)
+  // React runs effects twice in development; this keeps it to one account.
+  const started = useRef(false)
 
   useEffect(() => {
-    if (failed) return
-    if (done === 0 && rejects) {
-      const t = setTimeout(() => setFailed(true), 900)
-      return () => clearTimeout(t)
-    }
-    if (done < checks.length) {
-      const t = setTimeout(() => setDone(d => d + 1), 650)
-      return () => clearTimeout(t)
-    }
-    // All checks passed: create it. Runs inside a timer so React's double-run of
-    // effects in development can't add the account twice.
-    const t = setTimeout(() => {
-      const hint = provider === 'BINANCE' ? `Key ending …${credentials.apiKey.slice(-4)}`
-        : provider === 'IBKR' ? `Token ending …${credentials.token.slice(-3)} · expires in 365 days`
-          : provider === 'CTRADER' ? 'Connected via cTrader ID' : null
-      const { id, importedTrades } = previewActions.addAccount({ ...details.draft, credentialHint: hint })
-      onDone({ id, importedTrades })
-    }, 400)
-    return () => clearTimeout(t)
-  }, [done, failed, rejects, checks.length, provider, credentials, details, onDone])
+    if (started.current) return
+    started.current = true
+    accountApi.create(details.draft)
+      .then(async ({ account }) => { await refresh(); onDone({ account }) })
+      .catch(err => setError(err.message))
+  }, [details, onDone, refresh])
 
-  if (failed) {
+  if (error) {
     return (
       <div>
         <div role="alert" style={{ color: '#ef4444', fontSize: '13px', padding: '12px', borderRadius: '10px', border: '1px solid #ef444444', backgroundColor: '#ef444411', lineHeight: 1.5, marginBottom: '14px' }}>
-          This key has trading permission, so it wasn't saved. Create a new key with only "Enable Reading" ticked.
+          {error}
         </div>
-        <PrimaryButton onClick={onFail}>USE A DIFFERENT KEY</PrimaryButton>
+        <PrimaryButton onClick={onFail}>BACK TO DETAILS</PrimaryButton>
       </div>
     )
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '0.5rem 0' }}>
-      {checks.map((label, i) => {
-        const state = i < done ? 'done' : i === done ? 'running' : 'waiting'
-        return (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '10px', color: state === 'waiting' ? '#444' : '#e5e7eb', fontSize: '13px' }}>
-            <span aria-hidden style={{ width: '18px', textAlign: 'center', color: state === 'done' ? '#22c55e' : '#9ca3af' }}>
-              {state === 'done' ? '✓' : state === 'running' ? '…' : '·'}
-            </span>
-            {label}
-          </div>
-        )
-      })}
-    </div>
-  )
+  return <div style={{ color: '#9ca3af', fontSize: '13px', padding: '0.5rem 0' }}>Creating the account…</div>
 }
 
 // --- Done ---
 
 function DoneStep({ result }) {
   const navigate = useNavigate()
-  const store = useAccountsPreview()
-  const account = store.accounts.find(a => a.id === result.id)
-  if (!account) return null
+  const { titleOf } = useAccounts()
+  const { account } = result
+  const title = titleOf(account)
 
   return (
     <div>
-      <WalletCard account={account} title={accountTitle(account, store.accounts)} figures={accountFigures(store, account)} />
-      <div style={{ color: '#22c55e', fontSize: '13px', margin: '16px 0 4px' }}>✓ {accountTitle(account, store.accounts)} is in your wallet</div>
+      <WalletCard account={account} title={title} figures={account.figures} />
+      <div style={{ color: '#22c55e', fontSize: '13px', margin: '16px 0 4px' }}>✓ {title} is in your wallet</div>
       <div style={{ color: '#777', fontSize: '12px', lineHeight: 1.5, marginBottom: '18px' }}>
-        {result.importedTrades > 0
-          ? `Imported ${result.importedTrades} trades. It syncs every ~10 minutes from now on.`
-          : 'Log trades and deposits/withdrawals against it, and its balance keeps itself up to date.'}
+        Log trades and deposits/withdrawals against it, and its balance keeps itself up to date.
       </div>
       <PrimaryButton onClick={() => navigate(`/accounts/${account.id}`, { replace: true })}>VIEW ACCOUNT</PrimaryButton>
       <button type="button" onClick={() => navigate('/accounts', { replace: true })}

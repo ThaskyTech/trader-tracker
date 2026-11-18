@@ -3,11 +3,6 @@
 export default function WinRateCard({ summary }) {
   const hasTrades = summary?.totalTrades > 0
 
-  const getEfficiency = (r) => {
-    if (r >= 70) return 'HIGH'
-    if (r >= 50) return 'MODERATE'
-    return 'LOW'
-  }
 
   return (
     <div style={{
@@ -31,16 +26,11 @@ export default function WinRateCard({ summary }) {
         )}
       </div>
 
-      <div style={{ color: '#444', fontSize: '11px', letterSpacing: '0.5px' }}>
-        {hasTrades ? (
-          <>
-            Operational efficiency:{' '}
-            <span style={{ color: '#22d3ee' }}>{getEfficiency(summary.winRate)}</span>
-          </>
-        ) : (
-          'No closed trades this month.'
-        )}
-      </div>
+      {/* No "efficiency" grade: it restated the percentage in words, and win rate alone
+          doesn't measure efficiency (a 40% win rate with big winners is a good result). */}
+      {!hasTrades && (
+        <div style={{ color: '#444', fontSize: '11px', letterSpacing: '0.5px' }}>No closed trades this month.</div>
+      )}
     </div>
   )
 }

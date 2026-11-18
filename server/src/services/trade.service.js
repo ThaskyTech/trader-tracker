@@ -5,17 +5,23 @@ const DECIMAL_FIELDS = ['lotSize', 'entryPrice', 'exitPrice', 'pnl', 'pnlUsd', '
 // Prisma returns Decimal objects, which JSON would serialise as strings ("1250.5").
 // Storage and all maths stay exact. Values are only converted to plain numbers
 // here, at the API boundary, so the client can use them directly.
+// The broker name is stored on the account (D-37); queries include it through
+// TRADE_INCLUDE, and it's flattened back onto the trade here so clients still get `broker`.
 export function toTradeDTO(trade){
-    const dto = { ...trade }
+    const { account, ...dto } = trade
     for(const field of DECIMAL_FIELDS){
         if(dto[field] != null) dto[field] = Number(dto[field])
     }
+    if(account) dto.broker = account.broker
     return dto
 }
 
+export const TRADE_INCLUDE = { account: { select: { broker: true } } }
+
 // Prisma `where` conditions for the History filters.
-export function tradeFilterWhere({ direction, outcome } = {}){
+export function tradeFilterWhere({ accountId, direction, outcome } = {}){
     return {
+        ...(accountId && { accountId }),
         ...(direction && { direction }),
         ...(outcome === 'PROFIT' && { pnlUsd: { gt: 0 } }),
         ...(outcome === 'LOSS' && { pnlUsd: { lt: 0 } })

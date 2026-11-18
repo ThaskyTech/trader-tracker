@@ -2,13 +2,22 @@ import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { tradeApi } from '../api/client'
 import {
-  BROKERS, emptyForm, tradeToForm, validateForm, changedFields,
+  emptyForm, tradeToForm, validateForm, changedFields,
   serverFieldErrors, toLocalDateString, parseAmount,
 } from '../utils/tradeForm'
 import { CURRENCIES, CURRENCY_CODES, formatMoney } from '../utils/currency'
 import { useCurrency } from '../context/CurrencyContext'
-import { useAccountsPreview } from '../preview/accountsPreview'
-import { accountTitle } from '../utils/accounts'
+import { useAccounts } from '../context/AccountsContext'
+import AccountPicker from '../components/accounts/AccountPicker'
+
+// The account picked last time on this device (D-37), for the same reason as the currency.
+const LAST_ACCOUNT_KEY = 'lastAccountId'
+function readLastAccount(){
+  try { return localStorage.getItem(LAST_ACCOUNT_KEY) } catch { return null }
+}
+function saveLastAccount(id){
+  try { localStorage.setItem(LAST_ACCOUNT_KEY, id) } catch { /* storage unavailable */ }
+}
 
 // The P&L currency picked last time on this device. Most people log most trades from
 // the same account, so this saves re-picking it every time.
@@ -28,6 +37,16 @@ function saveLastCurrency(code){
 //   /trades/:id/edit             -> edit or delete an existing trade
 export default function TradeForm() {
   const { id } = useParams()
+  const navigate = useNavigate()
+  const { accounts } = useAccounts()
+  // A new trade's starting account and currency depend on the accounts, so wait for them.
+  if (!id && accounts === null) {
+    return (
+      <Page title="Log Trade" onBack={() => navigate(-1)}>
+        <div style={{ color: '#555', fontSize: '12px', letterSpacing: '1px' }}>LOADING...</div>
+      </Page>
+    )
+  }
   // The key gives each trade (and "new") its own fresh form state, even when
   // React Router reuses this component while navigating between them.
   return <TradeFormInner key={id ?? 'new'} id={id} />
@@ -40,17 +59,32 @@ function TradeFormInner({ id }) {
   const isEdit = Boolean(id)
   const { displayCurrency, rates } = useCurrency()
 
-  // Opened from an account (/trades/new?account=...): the broker is locked to that
-  // account and the currency starts as the account's (D-16). For now the accounts
-  // are sample data (roadmap 6a); in 6c this becomes the trade's accountId.
-  const store = useAccountsPreview()
-  const lockedAccount = isEdit ? null : store.accounts.find(a => a.id === searchParams.get('account')) ?? null
+  // Opened from an account (/trades/new?account=...): the account is locked and the
+  // currency starts as the account's (D-16, D-37). Archived accounts take no new trades.
+  const { active, byId, titleOf, refresh: refreshAccounts } = useAccounts()
+  const lockedAccount = isEdit ? null : active.find(a => a.id === searchParams.get('account')) ?? null
 
   const [form, setForm] = useState(() => {
     if (isEdit) return null
-    const initial = emptyForm(searchParams.get('date'), lockedAccount?.currency ?? readLastCurrency() ?? displayCurrency)
-    return lockedAccount ? { ...initial, broker: lockedAccount.broker } : initial
+    // Which account a new trade starts on: the locked one, else the last one used here,
+    // else the only one if there's just one. Otherwise none, so it's a deliberate choice.
+    const last = active.find(a => a.id === readLastAccount())
+    const start = lockedAccount ?? last ?? (active.length === 1 ? active[0] : null)
+    // P&L currency starts as the account's: a broker reports P&L in the account currency.
+    const initial = emptyForm(searchParams.get('date'), start?.currency ?? readLastCurrency() ?? displayCurrency)
+    return start ? { ...initial, accountId: start.id } : initial
   })
+
+  // Accounts the trade can be on. When editing a trade on an archived account, that
+  // account is included so the field still shows where the trade is.
+  const current = form?.accountId ? byId(form.accountId) : null
+  const accountOptions = [...active, ...(current?.archivedAt ? [current] : [])]
+    .map(account => ({ account, title: titleOf(account) }))
+
+  const pickAccount = account => {
+    setForm(f => ({ ...f, accountId: account.id, pnlCurrency: account.currency }))
+    if (errors.accountId) setErrors(e => ({ ...e, accountId: undefined }))
+  }
   // In edit mode: the stored trade as the form sees it, to work out what changed.
   const [baseline, setBaseline] = useState(null)
   const [loadError, setLoadError] = useState(null)
@@ -82,6 +116,13 @@ function TradeFormInner({ id }) {
   // After logging a new trade, show the day it closed on, since that's where it now appears.
   const goToDay = closedAt => navigate(`/daily/${toLocalDateString(new Date(closedAt))}`, { replace: true })
 
+  // D-36: logged from an account (locked), go back to it, where the trade now shows.
+  const finishCreate = closedAt => {
+    if (!lockedAccount) return goToDay(closedAt)
+    if (location.key !== 'default') return navigate(-1)
+    navigate(`/accounts/${lockedAccount.id}`, { replace: true })
+  }
+
   // After editing or deleting, return to wherever the user came from (Daily Log or
   // History), which reloads with the change. If the form was opened directly from
   // a link, there's nowhere to go back to, so show the trade's day instead.
@@ -101,15 +142,20 @@ function TradeFormInner({ id }) {
 
     setSaving(true)
     saveLastCurrency(payload.pnlCurrency)
+    // A locked account was imposed by where the form opened, not chosen, so it isn't remembered.
+    if (!isEdit && !lockedAccount) saveLastAccount(payload.accountId)
     try {
       if (isEdit) {
         const changes = baseline?.payload ? changedFields(payload, baseline.payload) : payload
         if (Object.keys(changes).length === 0) return finishEdit(baseline.closedAt)
         const { trade } = await tradeApi.updateTrade(id, changes)
+        // Balances are calculated from trades (D-19), so the accounts list is reloaded.
+        refreshAccounts()
         finishEdit(trade.closedAt)
       } else {
         const { trade } = await tradeApi.createTrade(payload)
-        goToDay(trade.closedAt)
+        refreshAccounts()
+        finishCreate(trade.closedAt)
       }
     } catch (err) {
       setErrors(serverFieldErrors(err.details))
@@ -125,6 +171,7 @@ function TradeFormInner({ id }) {
     setFormError(null)
     try {
       await tradeApi.deleteTrade(id)
+      refreshAccounts()
       finishEdit(baseline.closedAt)
     } catch (err) {
       setFormError(err.message)
@@ -174,26 +221,28 @@ function TradeFormInner({ id }) {
           />
         </Field>
 
-        {lockedAccount ? (
-          <Field label="ACCOUNT" htmlFor="broker">
-            <input id="broker" value={accountTitle(lockedAccount, store.accounts)} readOnly style={{ ...inputStyle(false), opacity: 0.7 }} />
-            <div style={{ color: '#555', fontSize: '11px', marginTop: '6px', lineHeight: 1.4 }}>
-              Locked because you came from this account. Preview: it saves as a normal trade with broker {lockedAccount.broker} and won't show on the sample account.
+        {/* The account the trade was on (D-37). Editing can move a trade to another account. */}
+        <Field label="ACCOUNT" htmlFor="account" error={errors.accountId}>
+          {accountOptions.length === 0 ? (
+            <div style={{ color: '#9ca3af', fontSize: '12px', lineHeight: 1.5 }}>
+              Add an account first, in the Accounts tab. Every trade belongs to one.
             </div>
-          </Field>
-        ) : (
-          <Field label="BROKER" htmlFor="broker" error={errors.broker}>
-            <input
-              id="broker" {...bind('broker')}
-              list="broker-options" placeholder="Exness"
-              autoComplete="off"
-              style={inputStyle(errors.broker)}
+          ) : (
+            <AccountPicker
+              id="account"
+              options={accountOptions}
+              value={form.accountId}
+              onChange={pickAccount}
+              error={Boolean(errors.accountId)}
+              locked={Boolean(lockedAccount)}
             />
-            <datalist id="broker-options">
-              {BROKERS.map(b => <option key={b} value={b} />)}
-            </datalist>
-          </Field>
-        )}
+          )}
+          {lockedAccount && (
+            <div style={{ color: '#555', fontSize: '11px', marginTop: '6px', lineHeight: 1.4 }}>
+              Set by the account you came from.
+            </div>
+          )}
+        </Field>
 
         <Field label="LOT SIZE" htmlFor="lotSize" error={errors.lotSize}>
           <input id="lotSize" {...bind('lotSize')} inputMode="decimal" placeholder="0.50" style={inputStyle(errors.lotSize)} />

@@ -8,6 +8,8 @@ import CalendarGrid from '../components/calendar/CalendarGrid'
 import OperationsLog from '../components/dashboard/OperationsLog'
 import MarketAtmosphere from '../components/dashboard/MarketAtmosphere'
 import { tradeApi } from '../api/client'
+import { useAccounts, netWorthOf } from '../context/AccountsContext'
+import { toLocalDateString } from '../utils/tradeForm'
 
 // month is 1-12. shiftMonth({ year: 2026, month: 1 }, -1) -> { year: 2025, month: 12 }
 function shiftMonth({ year, month }, delta) {
@@ -52,21 +54,32 @@ export default function Dashboard() {
     return () => { cancelled = true }
   }, [year, monthNumber])
 
-  // Not tied to the month: all-time totals and the latest trades.
+  // Not tied to the month: today's trades (for the header's change) and the latest trades.
   useEffect(() => {
     let cancelled = false
-    Promise.all([tradeApi.getHistorySummary(), tradeApi.getRecentTrades(5)])
-      .then(([history, recent]) => { if (!cancelled) setOverview({ history, recentTrades: recent.trades }) })
+    Promise.all([tradeApi.getTradesByDay(toLocalDateString(new Date())), tradeApi.getRecentTrades(5)])
+      .then(([today, recent]) => {
+        if (cancelled) return
+        const todayPnl = today.trades.length ? today.trades.reduce((sum, t) => sum + t.pnlUsd, 0) : null
+        setOverview({ todayPnl, recentTrades: recent.trades })
+      })
       .catch(err => { if (!cancelled) setOverviewError(err.message) })
     return () => { cancelled = true }
   }, [])
+
+  // Net worth comes from the shared accounts list, so it matches the Accounts tab exactly.
+  const { accounts, active } = useAccounts()
 
   const month = monthData?.key === viewKey ? monthData : null
   const error = (monthError?.key === viewKey ? monthError.message : null) ?? overviewError
 
   return (
     <div style={{ paddingBottom: '1.5rem' }}>
-      <Header history={overview?.history} />
+      <Header
+        netWorth={accounts === null ? undefined : netWorthOf(active)}
+        hasAccounts={accounts === null ? undefined : active.length > 0}
+        today={overview?.todayPnl}
+      />
 
       {error && (
         <div role="alert" style={{

@@ -40,8 +40,12 @@ export function titleClashError(candidate, accounts){
   return null
 }
 
+// An account the 6b migration created has no style until the owner sets one (D-47
+// exception): its title is just the broker, which can't clash because the migration
+// made one account per broker.
 export function accountTitle(account, accounts = []){
-  const base = `${account.broker} · ${STYLES[account.style]?.label ?? 'Unstyled'}`
+  const style = STYLES[account.style]?.label
+  const base = style ? `${account.broker} · ${style}` : account.broker
   return hasTitleClash(account, accounts) && account.accountNumber ? `${base} #${account.accountNumber}` : base
 }
 
@@ -49,6 +53,10 @@ export function accountTitle(account, accounts = []){
 // a new API type needs its own adapter in code, so it can't be added from the UI.
 //   sync: 'auto'   -> the server pulls balance, positions, trades and cash movements
 //   sync: 'manual' -> the user logs trades and cash movements; balance is calculated (D-19)
+// What can be added today (matches the server). The synced types need their adapters
+// first (roadmap 7-8); until then the wizard shows them as coming soon.
+export const CREATABLE_PROVIDERS = ['MT5', 'MANUAL']
+
 export const PROVIDERS = {
   // platform: short name shown on the card's second line. null where the platform IS
   // the broker (Binance, IBKR), so the card doesn't repeat the title.
@@ -123,8 +131,8 @@ const STALE_AFTER_MS = { BINANCE: 30 * 60e3, CTRADER: 30 * 60e3, IBKR: 36 * 3600
 // One status per account, so the card, list and detail page all agree.
 //   OK | STALE | ERROR | MANUAL | RECONNECT (restored from the archive, credentials wiped)
 export function syncState(account, now = Date.now()){
-  if(account.status === 'ERROR') return 'ERROR'
-  if(account.status === 'RECONNECT') return 'RECONNECT'
+  if(account.syncStatus === 'ERROR') return 'ERROR'
+  if(account.syncStatus === 'RECONNECT') return 'RECONNECT'
   if(!isAutoSync(account)) return 'MANUAL'
   const limit = STALE_AFTER_MS[account.provider] ?? 30 * 60e3
   if(!account.lastSyncedAt || now - new Date(account.lastSyncedAt).getTime() > limit) return 'STALE'

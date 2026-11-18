@@ -1,14 +1,15 @@
 import prisma from '../config/db.js'
 import { HttpError } from '../middleware/error.middleware.js'
 import {
-    toTradeDTO, summarizeTrades, dailyTotals,
+    toTradeDTO, summarizeTrades, dailyTotals, TRADE_INCLUDE,
     tradeFilterWhere, TRADE_LIST_ORDER, encodeCursor, decodeCursor, afterCursorWhere
 } from '../services/trade.service.js'
 import { convertPnl } from '../services/fx.service.js'
 import {
     createTradeSchema, updateTradeSchema, checkTradeTimes,
-    timeZoneQuerySchema, monthQuerySchema, listTradesQuerySchema, tradeFilterSchema
+    dayQuerySchema, monthQuerySchema, listTradesQuerySchema, tradeFilterSchema
 } from '../validators/trade.schema.js'
+import { findWritableAccount } from './account.controller.js'
 import { getLocalParts, localDayRange, localMonthRange, parseDateString } from '../utils/time.js'
 
 // No try/catch here: Express 5 sends any thrown error, including a ZodError from
@@ -16,18 +17,21 @@ import { getLocalParts, localDayRange, localMonthRange, parseDateString } from '
 
 // Year and month from the query, defaulting to the current month in the user's timezone.
 function resolveMonth(query){
-    const { tz, year, month } = monthQuerySchema.parse(query)
+    const { tz, year, month, accountId } = monthQuerySchema.parse(query)
     const now = getLocalParts(new Date(), tz)
-    return { tz, year: year ?? now.year, month: month ?? now.month }
+    return { tz, year: year ?? now.year, month: month ?? now.month, accountId }
 }
 
 export async function createTrade(req, res){
     const data = createTradeSchema.parse(req.body)
+    // Another user's account is a 404 and an archived one a 400 (D-18, D-33).
+    await findWritableAccount(req.userId, data.accountId)
     // Store the USD value alongside what was typed, using the rate on the close date.
     const fx = await convertPnl(data)
 
     const trade = await prisma.trade.create({
-        data: { ...data, ...fx, userId: req.userId, source: 'MANUAL' }
+        data: { ...data, ...fx, userId: req.userId, source: 'MANUAL' },
+        include: TRADE_INCLUDE
     })
 
     res.status(201).json({ trade: toTradeDTO(trade) })
@@ -49,7 +53,8 @@ export async function getTrades(req, res){
     const rows = await prisma.trade.findMany({
         where: { userId: req.userId, ...tradeFilterWhere(filters), ...after },
         orderBy: TRADE_LIST_ORDER,
-        take: limit === undefined ? undefined : limit + 1
+        take: limit === undefined ? undefined : limit + 1,
+        include: TRADE_INCLUDE
     })
 
     const hasMore = limit !== undefined && rows.length > limit
@@ -63,7 +68,7 @@ export async function getTrades(req, res){
 
 // GET /trades/:id — one trade, used by the edit form.
 export async function getTrade(req, res){
-    const trade = await prisma.trade.findFirst({ where: { id: req.params.id, userId: req.userId } })
+    const trade = await prisma.trade.findFirst({ where: { id: req.params.id, userId: req.userId }, include: TRADE_INCLUDE })
     if(!trade) throw new HttpError(404, 'Trade not found.')
 
     res.status(200).json({ trade: toTradeDTO(trade) })
@@ -75,12 +80,13 @@ export async function getTradesByDay(req, res){
     const date = parseDateString(req.params.date)
     if(!date) throw new HttpError(400, 'Invalid date. Use the format YYYY-MM-DD.')
 
-    const { tz } = timeZoneQuerySchema.parse(req.query)
+    const { tz, accountId } = dayQuerySchema.parse(req.query)
     const { start, end } = localDayRange(date.year, date.month, date.day, tz)
 
     const trades = await prisma.trade.findMany({
-        where: { userId: req.userId, closedAt: { gte: start, lt: end } },
-        orderBy: { closedAt: 'desc' }
+        where: { userId: req.userId, ...(accountId && { accountId }), closedAt: { gte: start, lt: end } },
+        orderBy: { closedAt: 'desc' },
+        include: TRADE_INCLUDE
     })
 
     res.status(200).json({ trades: trades.map(toTradeDTO) })
@@ -100,6 +106,9 @@ export async function updateTrade(req, res){
     })
     if(problem) throw new HttpError(400, `closedAt: ${problem}`)
 
+    // Moving a trade to another account: same checks as creating one there.
+    if(data.accountId && data.accountId !== existing.accountId) await findWritableAccount(req.userId, data.accountId)
+
     // The USD value depends on the amount, its currency and the close date (which
     // picks the rate). If any of them change, convert again using the merged values.
     let fx = {}
@@ -111,7 +120,7 @@ export async function updateTrade(req, res){
         })
     }
 
-    const trade = await prisma.trade.update({ where: { id: existing.id }, data: { ...data, ...fx } })
+    const trade = await prisma.trade.update({ where: { id: existing.id }, data: { ...data, ...fx }, include: TRADE_INCLUDE })
 
     res.status(200).json({ trade: toTradeDTO(trade) })
 }
@@ -126,11 +135,11 @@ export async function deleteTrade(req, res){
 
 // GET /trades/summary/month?year=2026&month=11&tz=Africa/Johannesburg
 export async function getMonthlySummary(req, res){
-    const { tz, year, month } = resolveMonth(req.query)
+    const { tz, year, month, accountId } = resolveMonth(req.query)
     const { start, end } = localMonthRange(year, month, tz)
 
     const trades = await prisma.trade.findMany({
-        where: { userId: req.userId, closedAt: { gte: start, lt: end } },
+        where: { userId: req.userId, ...(accountId && { accountId }), closedAt: { gte: start, lt: end } },
         select: { pnlUsd: true }
     })
 
@@ -140,11 +149,11 @@ export async function getMonthlySummary(req, res){
 // GET /trades/summary/calendar?year=2026&month=11&tz=Africa/Johannesburg
 // Net P&L per local day: { days: { 1: 840, 2: -1205, ... } }
 export async function getCalendarSummary(req, res){
-    const { tz, year, month } = resolveMonth(req.query)
+    const { tz, year, month, accountId } = resolveMonth(req.query)
     const { start, end } = localMonthRange(year, month, tz)
 
     const trades = await prisma.trade.findMany({
-        where: { userId: req.userId, closedAt: { gte: start, lt: end } },
+        where: { userId: req.userId, ...(accountId && { accountId }), closedAt: { gte: start, lt: end } },
         select: { closedAt: true, pnlUsd: true }
     })
 

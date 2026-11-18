@@ -1,25 +1,5 @@
 import { useEffect } from 'react'
-import { STYLES, STYLE_KEYS } from '../../utils/accounts'
-
-// Shown on every Accounts screen while it runs on sample data (roadmap 6a), so preview
-// numbers are never mistaken for real ones.
-export function PreviewBanner() {
-  return (
-    <div style={{
-      margin: '0.75rem 1rem 0',
-      padding: '8px 12px',
-      borderRadius: '8px',
-      border: '1px dashed #f59e0b66',
-      backgroundColor: '#f59e0b0f',
-      color: '#fbbf24',
-      fontSize: '10px',
-      letterSpacing: '0.5px',
-      lineHeight: 1.5,
-    }}>
-      PREVIEW · SAMPLE DATA. Nothing here is saved, and it resets when you reload.
-    </div>
-  )
-}
+import { CATEGORIES, STYLES, STYLE_KEYS } from '../../utils/accounts'
 
 export function Section({ title, action, children, style }) {
   return (
@@ -154,6 +134,28 @@ export function StylePicker({ value, onChange }) {
           </button>
         )
       })}
+    </div>
+  )
+}
+
+// "These trades are one account's" (History and Daily Log, D-46). The dot and title match
+// the wallet card; ✕ goes back to all accounts. It sits above the totals because the
+// totals are filtered too.
+export function AccountFilterChip({ account, title, onClear }) {
+  return (
+    <div style={{ padding: '0.75rem 1rem 0' }}>
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: '8px', maxWidth: '100%', boxSizing: 'border-box',
+        padding: '6px 6px 6px 12px', borderRadius: '20px', fontSize: '12px', color: '#e5e7eb',
+        backgroundColor: '#141414', border: `1px solid ${CATEGORIES[account.category].color}66`,
+      }}>
+        <span aria-hidden style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: CATEGORIES[account.category].color, flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+        <button type="button" onClick={onClear} aria-label={`Show all accounts, not just ${title}`} style={{
+          background: '#1f1f1f', border: 'none', borderRadius: '50%', width: '22px', height: '22px', flexShrink: 0,
+          color: '#9ca3af', fontSize: '11px', cursor: 'pointer', lineHeight: 1, padding: 0,
+        }}>✕</button>
+      </span>
     </div>
   )
 }

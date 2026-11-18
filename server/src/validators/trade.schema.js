@@ -12,13 +12,18 @@ const positiveAmount = z.number().positive().lt(MAX_AMOUNT)
 // or "2026-11-17T16:30:00+02:00". A timestamp without a timezone is ambiguous.
 const timestamp = z.iso.datetime({ offset: true }).transform(value => new Date(value))
 
+// Account ids are UUIDs. Checked here so a malformed id is a 400, not a database error.
+const accountId = z.uuid({ message: 'Choose an account.' })
+
 // Fields a user may set. Anything else in the body, such as userId, source or id,
 // is stripped by zod, so a client can't assign a trade to another user or fake a broker sync.
 // fxRate and pnlUsd are also stripped: the server works those out itself.
 const tradeFields = {
     symbol: z.string().trim().min(1).max(30).transform(s => s.toUpperCase()),
     direction: z.enum(['LONG', 'SHORT']),
-    broker: z.string().trim().min(1).max(50),
+    // The account the trade was on (D-37). Its broker name comes from the account.
+    // The controller checks that it's the user's and isn't archived.
+    accountId,
     lotSize: positiveAmount,
     entryPrice: positiveAmount,
     exitPrice: positiveAmount,
@@ -58,9 +63,14 @@ const timeZoneParam = z.string()
 
 export const timeZoneQuerySchema = z.object({ tz: timeZoneParam })
 
+// GET /trades/day/:date?tz=…&accountId=…  The Daily Log, optionally for one account (D-46).
+export const dayQuerySchema = z.object({ tz: timeZoneParam, accountId: accountId.optional() })
+
 // Filters shared by the trade list and the history summary, so the History page's
 // totals always describe the same trades as its list. Break-even trades match neither outcome.
 const tradeFilterFields = {
+    // History filtered to one account (D-46).
+    accountId: accountId.optional(),
     direction: z.enum(['LONG', 'SHORT']).optional(),
     outcome: z.enum(['PROFIT', 'LOSS']).optional()
 }
@@ -74,8 +84,10 @@ export const listTradesQuerySchema = z.object({
     cursor: z.string().max(200).optional()
 })
 
+// The monthly cards and calendar, optionally for one account's page (D-45).
 export const monthQuerySchema = z.object({
     tz: timeZoneParam,
+    accountId: accountId.optional(),
     year: z.coerce.number().int().min(2000).max(2100).optional(),
     month: z.coerce.number().int().min(1).max(12).optional()
 })

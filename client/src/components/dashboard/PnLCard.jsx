@@ -23,7 +23,7 @@ export default function PnlCard({ view, summary, previousSummary }) {
       padding: '1rem',
     }}>
       <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1.5px', marginBottom: '8px' }}>
-        MONTHLY PNL · {monthLabel}
+        MONTHLY P/L · {monthLabel}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '4px 10px' }}>

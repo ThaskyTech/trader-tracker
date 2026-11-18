@@ -4,7 +4,7 @@ import { createTradeSchema, updateTradeSchema, monthQuerySchema, listTradesQuery
 const validTrade = {
     symbol: ' eurusd ',
     direction: 'LONG',
-    broker: 'Exness',
+    accountId: '6f1c2a9e-0000-4000-8000-0000000000aa',
     lotSize: 0.5,
     entryPrice: 1.0821,
     exitPrice: 1.0855,
@@ -26,6 +26,10 @@ describe('createTradeSchema', () => {
         expect(trade.closedAt.toISOString()).toBe('2026-11-17T08:30:00.000Z')
     })
 
+    it('ignores a broker name: it comes from the account now (D-37)', () => {
+        expect(createTradeSchema.parse({ ...validTrade, broker: 'Exness' })).not.toHaveProperty('broker')
+    })
+
     it('strips fields the client must not set', () => {
         const trade = createTradeSchema.parse({ ...validTrade, userId: 'someone-else', source: 'BINANCE', id: 'x' })
         expect(trade).not.toHaveProperty('userId')
@@ -35,7 +39,7 @@ describe('createTradeSchema', () => {
 
     it('reports every missing required field', () => {
         expect(issuesFor(createTradeSchema, {})).toEqual(
-            expect.arrayContaining(['symbol', 'direction', 'broker', 'lotSize', 'entryPrice', 'exitPrice', 'pnl', 'openedAt', 'closedAt'])
+            expect.arrayContaining(['symbol', 'direction', 'accountId', 'lotSize', 'entryPrice', 'exitPrice', 'pnl', 'openedAt', 'closedAt'])
         )
     })
 
@@ -48,7 +52,8 @@ describe('createTradeSchema', () => {
         ['timestamp without a timezone', { openedAt: '2026-11-17T08:00:00' }, 'openedAt'],
         ['closed before it opened', { closedAt: '2026-11-17T07:00:00.000Z' }, 'closedAt'],
         ['closed in the future', { closedAt: '2099-01-01T00:00:00.000Z' }, 'closedAt'],
-        ['empty symbol', { symbol: '   ' }, 'symbol']
+        ['empty symbol', { symbol: '   ' }, 'symbol'],
+        ['account id that is not a UUID', { accountId: 'exness' }, 'accountId']
     ])('rejects %s', (_, override, field) => {
         expect(issuesFor(createTradeSchema, { ...validTrade, ...override })).toContain(field)
     })
