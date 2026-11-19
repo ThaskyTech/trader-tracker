@@ -1,5 +1,4 @@
 // Account definitions shared by the Accounts screens (D-16, D-17).
-// These survive into the real build; only the sample data in src/preview is temporary.
 
 // Each account belongs to exactly one category (D-17). The colour tints its card and chart.
 export const CATEGORIES = {
@@ -53,9 +52,9 @@ export function accountTitle(account, accounts = []){
 // a new API type needs its own adapter in code, so it can't be added from the UI.
 //   sync: 'auto'   -> the server pulls balance, positions, trades and cash movements
 //   sync: 'manual' -> the user logs trades and cash movements; balance is calculated (D-19)
-// What can be added today (matches the server). The synced types need their adapters
-// first (roadmap 7-8); until then the wizard shows them as coming soon.
-export const CREATABLE_PROVIDERS = ['MT5', 'MANUAL']
+// What can be added today (matches the server). cTrader and IBKR need their adapters
+// first (roadmap 8); until then the wizard shows them as coming soon.
+export const CREATABLE_PROVIDERS = ['BINANCE', 'MT5', 'MANUAL']
 
 export const PROVIDERS = {
   // platform: short name shown on the card's second line. null where the platform IS
@@ -69,7 +68,13 @@ export const PROVIDERS = {
     method: 'Read-only API key',
     freshness: 'Every ~10 min',
     // Futures only (D-12): the owner doesn't use spot.
-    blurb: 'USDⓈ-M Futures: balance, open positions, closed P&L and transfers in and out.',
+    blurb: 'USDⓈ-M Futures: balance, open positions, closed trades and transfers. Connecting imports the last 3 months (D-62).',
+    // Shown when adding the key and when replacing it.
+    keySteps: [
+      'On Binance: Account → API Management → Create API → System generated.',
+      'Leave only "Enable Reading" ticked. The app checks this and refuses keys that can trade, transfer or withdraw (D-15).',
+      "Leave the IP restriction off: the server has no fixed address, and a read-only key can't move money.",
+    ],
   },
   CTRADER: {
     label: 'cTrader',
@@ -122,15 +127,17 @@ export const PROVIDER_KEYS = Object.keys(PROVIDERS)
 export const CARD_HEIGHT = 200
 export const CARD_PEEK = 64
 
-export const isAutoSync =account => PROVIDERS[account.provider]?.sync === 'auto'
+export const isAutoSync = account => PROVIDERS[account.provider]?.sync === 'auto'
 
 // How long before an automatic account's figures count as stale (D-14). IBKR only
 // syncs daily, so it gets a longer allowance than the ~10 minute brokers.
 const STALE_AFTER_MS = { BINANCE: 30 * 60e3, CTRADER: 30 * 60e3, IBKR: 36 * 3600e3 }
 
 // One status per account, so the card, list and detail page all agree.
-//   OK | STALE | ERROR | MANUAL | RECONNECT (restored from the archive, credentials wiped)
+//   SYNCING (the server is syncing it right now, e.g. the first import) | OK | STALE |
+//   ERROR | MANUAL | RECONNECT (key rejected, or restored from the archive with it wiped)
 export function syncState(account, now = Date.now()){
+  if(account.syncing) return 'SYNCING'
   if(account.syncStatus === 'ERROR') return 'ERROR'
   if(account.syncStatus === 'RECONNECT') return 'RECONNECT'
   if(!isAutoSync(account)) return 'MANUAL'
@@ -140,6 +147,7 @@ export function syncState(account, now = Date.now()){
 }
 
 export const SYNC_STATE_STYLE = {
+  SYNCING: { label: 'SYNCING', color: '#9ca3af' },
   OK: { label: 'SYNCED', color: '#22c55e' },
   STALE: { label: 'STALE', color: '#f59e0b' },
   ERROR: { label: 'ERROR', color: '#ef4444' },
@@ -154,6 +162,8 @@ export function freshnessLine(account, now = Date.now()){
   const state = syncState(account, now)
   const ago = timeAgo(account.lastSyncedAt, now)
   const text = {
+    // The first sync imports months of history, so it says so.
+    SYNCING: account.lastSyncedAt ? 'syncing…' : 'importing…',
     OK: `synced ${ago}`,
     STALE: `last synced ${ago}`,
     ERROR: 'sync failed',

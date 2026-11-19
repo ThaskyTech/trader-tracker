@@ -9,6 +9,8 @@ import { CURRENCIES, CURRENCY_CODES, formatMoney } from '../utils/currency'
 import { useCurrency } from '../context/CurrencyContext'
 import { useAccounts } from '../context/AccountsContext'
 import AccountPicker from '../components/accounts/AccountPicker'
+import { isAutoSync } from '../utils/accounts'
+import { formatTradeTime } from '../utils/format'
 
 // The account picked last time on this device (D-37), for the same reason as the currency.
 const LAST_ACCOUNT_KEY = 'lastAccountId'
@@ -60,8 +62,10 @@ function TradeFormInner({ id }) {
   const { displayCurrency, rates } = useCurrency()
 
   // Opened from an account (/trades/new?account=...): the account is locked and the
-  // currency starts as the account's (D-16, D-37). Archived accounts take no new trades.
-  const { active, byId, titleOf, refresh: refreshAccounts } = useAccounts()
+  // currency starts as the account's (D-16, D-37). Archived accounts take no new trades,
+  // and synced ones take none by hand: their trades come from the broker (D-63).
+  const { active: allActive, byId, titleOf, refresh: refreshAccounts } = useAccounts()
+  const active = allActive.filter(a => !isAutoSync(a))
   const lockedAccount = isEdit ? null : active.find(a => a.id === searchParams.get('account')) ?? null
 
   const [form, setForm] = useState(() => {
@@ -92,6 +96,8 @@ function TradeFormInner({ id }) {
   const [formError, setFormError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // A trade synced from a broker opens as a read-only record instead (D-63).
+  const [syncedTrade, setSyncedTrade] = useState(null)
 
   useEffect(() => {
     if (!isEdit) return
@@ -99,6 +105,7 @@ function TradeFormInner({ id }) {
     tradeApi.getTrade(id)
       .then(({ trade }) => {
         if (cancelled) return
+        if (trade.source !== 'MANUAL') return setSyncedTrade(trade)
         const loaded = tradeToForm(trade)
         setForm(loaded)
         setBaseline({ payload: validateForm(loaded).payload, closedAt: trade.closedAt })
@@ -182,6 +189,8 @@ function TradeFormInner({ id }) {
 
   const title = isEdit ? 'Edit Trade' : 'Log Trade'
 
+  if (syncedTrade) return <SyncedTrade trade={syncedTrade} onBack={() => navigate(-1)} onSaved={() => finishEdit(syncedTrade.closedAt)} />
+
   if (loadError) {
     return (
       <Page title={title} onBack={() => navigate(-1)}>
@@ -225,7 +234,9 @@ function TradeFormInner({ id }) {
         <Field label="ACCOUNT" htmlFor="account" error={errors.accountId}>
           {accountOptions.length === 0 ? (
             <div style={{ color: '#9ca3af', fontSize: '12px', lineHeight: 1.5 }}>
-              Add an account first, in the Accounts tab. Every trade belongs to one.
+              {allActive.length > 0
+                ? 'Your accounts sync their trades automatically. To log trades by hand, add a manual account in the Accounts tab.'
+                : 'Add an account first, in the Accounts tab. Every trade belongs to one.'}
             </div>
           ) : (
             <AccountPicker
@@ -337,6 +348,76 @@ function TradeFormInner({ id }) {
             {confirmDelete ? 'TAP AGAIN TO DELETE' : 'DELETE TRADE'}
           </button>
         )}
+      </form>
+    </Page>
+  )
+}
+
+// A synced trade (D-63): the broker's record, shown as it is, with only the notes
+// editable. Editing anything else would disagree with the broker, and a deleted trade
+// would come back on the next sync. Each row is something the trade card doesn't show
+// in full: the fees behind the net P/L (D-61) and the exact times.
+function SyncedTrade({ trade, onBack, onSaved }) {
+  const { formatTradePnl, formatUsd } = useCurrency()
+  const { byId, titleOf } = useAccounts()
+  const [notes, setNotes] = useState(trade.notes ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+  const account = byId(trade.accountId)
+  const changed = notes.trim() !== (trade.notes ?? '')
+
+  const save = async e => {
+    e.preventDefault()
+    if (!changed) return onSaved()
+    setSaving(true)
+    setError(null)
+    try {
+      await tradeApi.updateTrade(trade.id, { notes: notes.trim() || null })
+      onSaved()
+    } catch (err) {
+      setError(err.message)
+      setSaving(false)
+    }
+  }
+
+  const row = (label, value, color = '#e5e7eb') => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '8px 0', borderTop: '1px solid #1f1f1f', fontSize: '13px' }}>
+      <span style={{ color: '#777' }}>{label}</span>
+      <span style={{ color, textAlign: 'right' }}>{value}</span>
+    </div>
+  )
+
+  return (
+    <Page title="Trade" onBack={onBack}>
+      <div style={{ backgroundColor: '#141414', borderRadius: '12px', padding: '14px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' }}>
+          <span style={{ color: trade.direction === 'LONG' ? '#22c55e' : '#ef4444', fontSize: '16px', fontWeight: 500 }}>{trade.symbol}</span>
+          <span style={{ color: '#888', fontSize: '12px' }}>{trade.direction}</span>
+        </div>
+        {row('Account', account ? titleOf(account) : trade.broker)}
+        {row('Size', trade.lotSize)}
+        {row('Entry → exit', `${trade.entryPrice} → ${trade.exitPrice}`)}
+        {row('Opened', formatTradeTime(trade.openedAt, null))}
+        {row('Closed', formatTradeTime(trade.closedAt, null))}
+        {trade.fees != null && row('Fees & funding', formatUsd(-trade.fees / trade.fxRate, { signed: true }))}
+        {row('Net P/L', formatTradePnl(trade, { signed: true }), trade.pnl < 0 ? '#ef4444' : '#22c55e')}
+      </div>
+      <div style={{ color: '#555', fontSize: '11px', lineHeight: 1.5, margin: '10px 0 16px' }}>
+        Synced from {trade.broker}, so only your notes can change.
+      </div>
+      <form onSubmit={save} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <Field label="NOTES" htmlFor="notes">
+          <textarea
+            id="notes" value={notes} onChange={e => setNotes(e.target.value)}
+            rows={4} maxLength={2000}
+            placeholder="Setup, reasoning, what you'd do differently..."
+            style={{ ...inputStyle(false), resize: 'vertical', fontSize: '14px' }}
+          />
+        </Field>
+        {error && <ErrorBox>{error}</ErrorBox>}
+        <button type="submit" disabled={saving || !changed} style={primaryButtonStyle(saving || !changed)}>
+          {saving ? 'SAVING...' : 'SAVE NOTES'}
+        </button>
       </form>
     </Page>
   )

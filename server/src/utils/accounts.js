@@ -5,9 +5,15 @@ export const PROVIDERS = ['BINANCE', 'CTRADER', 'IBKR', 'MT5', 'MANUAL']
 export const CATEGORIES = ['CRYPTO', 'FOREX', 'STOCKS']
 export const STYLES = ['BOT', 'SCALPING', 'DAY', 'SWING', 'LONG_TERM']
 
-// What can be added today. Binance, cTrader and IBKR need their sync adapters first
-// (roadmap 7-8), so creating one would give an account that can never update.
-export const CREATABLE_PROVIDERS = ['MT5', 'MANUAL']
+// What can be added today. cTrader and IBKR need their sync adapters first (roadmap 8),
+// so creating one would give an account that can never update.
+export const CREATABLE_PROVIDERS = ['BINANCE', 'MT5', 'MANUAL']
+
+// Providers whose figures come from the broker (D-12). Their trades are read-only
+// except notes, and they take no hand-entered trades, cash or corrections (D-63).
+// MT5 joins once the VPS reporter exists (D-13 step 2).
+export const SYNCED_PROVIDERS = ['BINANCE', 'CTRADER', 'IBKR']
+export const isSyncedProvider = provider => SYNCED_PROVIDERS.includes(provider)
 
 const STYLE_LABELS = { BOT: 'Bot', SCALPING: 'Scalping', DAY: 'Day trading', SWING: 'Swing', LONG_TERM: 'Long-term' }
 

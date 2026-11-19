@@ -39,7 +39,8 @@ async function parseBody(response){
 // If several requests hit a 401 at once, they all wait on the same refresh call.
 let refreshPromise = null
 
-async function refreshAccessToken(){
+// Exported for the live-updates socket, whose token is checked only when it connects.
+export async function refreshAccessToken(){
     const refreshToken = tokenStore.getRefresh()
     if(!refreshToken) return false
 
@@ -165,4 +166,9 @@ export const accountApi = {
     // balance: what the broker shows, in the account's currency (D-19)
     correctBalance: (id, balance) => api.post(accountPath(id, '/balance-correction'), { balance }),
     equity: (id, days = 90) => api.get(accountPath(id, `/equity${query({ days })}`)),
+    // Synced accounts (D-64, D-65)
+    positions: (id) => api.get(accountPath(id, '/positions')),
+    syncNow: (id) => api.post(accountPath(id, `/sync${query({})}`)),
+    // { apiKey, apiSecret }: checked by the server before it's saved (D-67)
+    replaceKey: (id, credentials) => api.post(accountPath(id, `/credentials${query({})}`), credentials),
 }

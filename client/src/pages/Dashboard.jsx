@@ -24,8 +24,11 @@ function currentMonth() {
 
 // The dashboard loads its data here and hands it to the cards, which only display it.
 // The P&L card, win rate card and calendar all follow the month the calendar shows.
+// Everything reloads when a broker sync lands (syncVersion, D-66).
 export default function Dashboard() {
   const [view, setView] = useState(currentMonth)
+  // Net worth comes from the shared accounts list, so it matches the Accounts tab exactly.
+  const { accounts, active, synced, live, syncVersion } = useAccounts()
   const { year, month: monthNumber } = view
   const viewKey = `${year}-${monthNumber}`
 
@@ -52,7 +55,7 @@ export default function Dashboard() {
       .catch(err => { if (!cancelled) setMonthError({ key, message: err.message }) })
 
     return () => { cancelled = true }
-  }, [year, monthNumber])
+  }, [year, monthNumber, syncVersion])
 
   // Not tied to the month: today's trades (for the header's change) and the latest trades.
   useEffect(() => {
@@ -65,10 +68,7 @@ export default function Dashboard() {
       })
       .catch(err => { if (!cancelled) setOverviewError(err.message) })
     return () => { cancelled = true }
-  }, [])
-
-  // Net worth comes from the shared accounts list, so it matches the Accounts tab exactly.
-  const { accounts, active } = useAccounts()
+  }, [syncVersion])
 
   const month = monthData?.key === viewKey ? monthData : null
   const error = (monthError?.key === viewKey ? monthError.message : null) ?? overviewError
@@ -79,6 +79,7 @@ export default function Dashboard() {
         netWorth={accounts === null ? undefined : netWorthOf(active)}
         hasAccounts={accounts === null ? undefined : active.length > 0}
         today={overview?.todayPnl}
+        live={live && synced.length > 0}
       />
 
       {error && (

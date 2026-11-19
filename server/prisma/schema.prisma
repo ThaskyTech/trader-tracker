@@ -7,14 +7,14 @@ datasource db {
 }
 
 model User {
-  id              String   @id @default(uuid())
-  email           String   @unique
-  username        String   @unique
+  id              String         @id @default(uuid())
+  email           String         @unique
+  username        String         @unique
   passwordHash    String
   // Money is stored in USD. This only controls the currency amounts are shown in.
-  displayCurrency Currency @default(USD)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  displayCurrency Currency       @default(USD)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
   trades          Trade[]
   accounts        Account[]
   refreshTokens   RefreshToken[]
@@ -22,13 +22,13 @@ model User {
   @@map("users")
 }
 
-model RefreshToken{
-  id              String    @id @default(uuid())
-  token           String    @unique
-  userId          String    
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt       DateTime
-  createdAt       DateTime  @default(now())
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 
   @@map("refresh_tokens")
 }
@@ -57,45 +57,52 @@ enum TradeSource {
 }
 
 model Trade {
-  id                String      @id @default(uuid())
-  userId            String 
-  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Every trade belongs to one account (D-16). The broker name lives on the account.
   // Deleting an account permanently deletes its trades (D-18); archiving keeps them.
-  accountId         String
-  account           Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  symbol            String
-  direction         Direction 
+  accountId   String
+  account     Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  symbol      String
+  direction   Direction
   // Money and quantities are exact decimals, not floats, so sums never drift
   // (0.1 + 0.2 is exactly 0.3). 8 decimal places covers crypto prices and lot sizes.
-  lotSize           Decimal       @db.Decimal(20, 8)
-  entryPrice        Decimal       @db.Decimal(20, 8)
-  exitPrice         Decimal       @db.Decimal(20, 8)
+  lotSize     Decimal     @db.Decimal(20, 8)
+  entryPrice  Decimal     @db.Decimal(20, 8)
+  exitPrice   Decimal     @db.Decimal(20, 8)
   // P&L exactly as the user entered it, in pnlCurrency.
-  pnl               Decimal       @db.Decimal(20, 8)
-  pnlCurrency       Currency      @default(USD)
+  pnl         Decimal     @db.Decimal(20, 8)
+  pnlCurrency Currency    @default(USD)
   // Units of pnlCurrency per 1 USD on the day the trade closed (e.g. 16.93 for ZAR).
-  fxRate            Decimal       @default(1) @db.Decimal(20, 10)
+  fxRate      Decimal     @default(1) @db.Decimal(20, 10)
   // pnl converted to USD with fxRate. All totals and summaries use this column.
-  pnlUsd            Decimal       @db.Decimal(20, 8)
-  openedAt          DateTime
-  closedAt          DateTime
-  notes             String?
-  source            TradeSource   @default(MANUAL)
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  pnlUsd      Decimal     @db.Decimal(20, 8)
+  openedAt    DateTime
+  closedAt    DateTime
+  notes       String?
+  source      TradeSource @default(MANUAL)
+  // Synced trades only (D-61): commission and funding paid, in pnlCurrency, positive
+  // for a cost. pnl is already net of them. Null on manual trades.
+  fees        Decimal?    @db.Decimal(20, 8)
+  // The broker's id for a synced trade (D-60). Unique per account, so a sync that sees
+  // the same trade again never saves it twice. Null on manual trades.
+  externalId  String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
-  @@map("trades")
+  @@unique([accountId, externalId])
   @@index([userId, openedAt])
   // P&L is realised when a trade closes, so the calendar and summaries group by closedAt.
   @@index([userId, closedAt])
   @@index([accountId, closedAt])
+  @@map("trades")
 }
 
 // --- Accounts (D-16 to D-19, D-27, D-47) ---
 
-// How an account connects (D-12). Only MT5 and MANUAL can be created until the sync
-// adapters exist (roadmap 7-8); the others are here so the list matches the client.
+// How an account connects (D-12). BINANCE syncs (roadmap 7); CTRADER and IBKR can't be
+// created until their adapters exist (roadmap 8). They're here so the list matches the client.
 enum AccountProvider {
   BINANCE
   CTRADER
@@ -128,41 +135,92 @@ enum SyncStatus {
 }
 
 model Account {
-  id                String          @id @default(uuid())
-  userId            String
-  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  provider          AccountProvider
-  broker            String
+  id                   String            @id @default(uuid())
+  userId               String
+  user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider             AccountProvider
+  broker               String
   // Required when adding an account. Null only on accounts the 6b migration created
   // from existing trades, until the owner picks a style (D-47).
-  style             TradingStyle?
-  category          AccountCategory
+  style                TradingStyle?
+  category             AccountCategory
   // The account's own currency at the broker. Fixed once the account has trades.
-  currency          Currency
+  currency             Currency
   // Last 4 digits, to tell apart two accounts with the same broker and style (D-47).
-  accountNumber     String?
+  accountNumber        String?
   // D-19: balance = opening balance + P&L of trades closed since openingDate + cash
   // movements. Stored like a trade's P&L (D-22): native amount, rate, USD value.
-  openingBalance    Decimal         @default(0) @db.Decimal(20, 8)
-  openingFxRate     Decimal         @default(1) @db.Decimal(20, 10)
-  openingBalanceUsd Decimal         @default(0) @db.Decimal(20, 8)
-  openingDate       DateTime
+  openingBalance       Decimal           @default(0) @db.Decimal(20, 8)
+  openingFxRate        Decimal           @default(1) @db.Decimal(20, 10)
+  openingBalanceUsd    Decimal           @default(0) @db.Decimal(20, 8)
+  openingDate          DateTime
   // Synced accounts (roadmap 7-8). Credentials are AES-256-GCM encrypted (D-15) and
   // never sent to the browser; credentialHint is the masked version that is.
   credentialsEncrypted String?
-  credentialHint    String?
-  syncStatus        SyncStatus?
-  lastSyncedAt      DateTime?
-  lastError         String?
+  credentialHint       String?
+  syncStatus           SyncStatus?
+  lastSyncedAt         DateTime?
+  lastError            String?
+  // Where the last sync stopped, so the next one only asks for what's new. Its shape
+  // belongs to the account's adapter (services/sync). Never sent to the browser.
+  syncCursor           Json?
+  // What the broker reports (D-64): synced accounts use these instead of D-19's
+  // calculated balance. Native amount plus its USD value at sync time (D-22).
+  reportedBalance      Decimal?          @db.Decimal(20, 8)
+  reportedBalanceUsd   Decimal?          @db.Decimal(20, 8)
+  reportedFloating     Decimal?          @db.Decimal(20, 8)
+  reportedFloatingUsd  Decimal?          @db.Decimal(20, 8)
   // Archived accounts leave net worth and stop syncing; their trades stay (D-18).
-  archivedAt        DateTime?
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  trades            Trade[]
-  cashMovements     CashMovement[]
+  archivedAt           DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  trades               Trade[]
+  cashMovements        CashMovement[]
+  positions            Position[]
+  snapshots            BalanceSnapshot[]
 
   @@index([userId])
   @@map("accounts")
+}
+
+// Open positions of a synced account (D-64), replaced on every sync. Kept apart from
+// trades so every trade can be assumed closed. IBKR holdings will use it too (step 8).
+model Position {
+  id               String    @id @default(uuid())
+  accountId        String
+  account          Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  symbol           String
+  direction        Direction
+  quantity         Decimal   @db.Decimal(20, 8)
+  entryPrice       Decimal   @db.Decimal(20, 8)
+  markPrice        Decimal?  @db.Decimal(20, 8)
+  // Floating P&L, native and USD (D-22).
+  unrealizedPnl    Decimal   @db.Decimal(20, 8)
+  currency         Currency
+  unrealizedPnlUsd Decimal   @db.Decimal(20, 8)
+  // When the current round trip started, if the sync saw it start (D-60).
+  openedAt         DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  @@index([accountId])
+  @@map("positions")
+}
+
+// A synced account's balance and equity, one row per UTC day, updated in place by
+// each sync that day (D-64). Drives the equity chart for synced accounts.
+model BalanceSnapshot {
+  id         String   @id @default(uuid())
+  accountId  String
+  account    Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date       DateTime @db.Date
+  balanceUsd Decimal  @db.Decimal(20, 8)
+  equityUsd  Decimal  @db.Decimal(20, 8)
+  // The moment these figures describe (the latest sync of the day, or the end of the
+  // day for history rebuilt at connect).
+  takenAt    DateTime
+
+  @@unique([accountId, date])
+  @@map("balance_snapshots")
 }
 
 // D-27. ADJUSTMENT is a "Correct balance" entry (D-19): visible, never a silent overwrite.
@@ -178,20 +236,23 @@ enum RecordOrigin {
 }
 
 model CashMovement {
-  id          String           @id @default(uuid())
-  accountId   String
-  account     Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  type        CashMovementType
+  id         String           @id @default(uuid())
+  accountId  String
+  account    Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type       CashMovementType
   // Signed: money in is positive, money out negative. Same pattern as a trade (D-22).
-  amount      Decimal          @db.Decimal(20, 8)
-  currency    Currency
-  fxRate      Decimal          @db.Decimal(20, 10)
-  amountUsd   Decimal          @db.Decimal(20, 8)
-  occurredAt  DateTime
-  note        String?
-  origin      RecordOrigin     @default(MANUAL)
-  createdAt   DateTime         @default(now())
+  amount     Decimal          @db.Decimal(20, 8)
+  currency   Currency
+  fxRate     Decimal          @db.Decimal(20, 10)
+  amountUsd  Decimal          @db.Decimal(20, 8)
+  occurredAt DateTime
+  note       String?
+  origin     RecordOrigin     @default(MANUAL)
+  // The broker's id for a synced transfer, unique per account (like Trade.externalId).
+  externalId String?
+  createdAt  DateTime         @default(now())
 
+  @@unique([accountId, externalId])
   @@index([accountId, occurredAt])
   @@map("cash_movements")
 }

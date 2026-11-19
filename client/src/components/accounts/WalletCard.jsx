@@ -22,7 +22,7 @@ export default function WalletCard({ account, title, figures, share, onClick, ar
   const freshness = freshnessLine(account)
   const monthPnl = figures.month.totalPnl
   const hasMonthTrades = figures.month.totalTrades > 0
-  const hasLivePositions = Boolean(account.positions)
+  const hasLivePositions = figures.openPositions > 0
   const floating = figures.floating
 
   // The equity in the account's own currency, so it can be checked against the broker's

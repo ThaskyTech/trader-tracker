@@ -99,8 +99,9 @@ export default function Accounts() {
         <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1.5px', marginBottom: '6px' }}>NET WORTH</div>
         <div style={{ color: '#fff', fontSize: '28px', fontWeight: 600, letterSpacing: '-1px' }}>{formatUsd(netWorth)}</div>
         <div style={{ color: '#555', fontSize: '11px', marginTop: '4px' }}>
-          {/* "including open positions" returns with synced accounts (roadmap 7); manual ones have none. */}
+          {/* Says floating P/L is in the total, only when some account has positions open. */}
           Equity across {active.length} {active.length === 1 ? 'account' : 'accounts'}
+          {active.some(a => a.figures.openPositions > 0) && ', including open positions'}
         </div>
 
         {showSplit && netWorth > 0 && (

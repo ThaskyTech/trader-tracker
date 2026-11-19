@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import WalletCard from './WalletCard'
-import { CARD_HEIGHT, CARD_PEEK, syncState } from '../../utils/accounts'
+import { CARD_HEIGHT, CARD_PEEK, isAutoSync, syncState } from '../../utils/accounts'
 import { useCurrency } from '../../context/CurrencyContext'
 
 // The quick-look panel is taller only when it has a problem to explain.
@@ -130,9 +130,10 @@ function QuickLook({ item, height, onOpen, onAddTrade, onClose }) {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px' }}>
+      {/* No "+ TRADE" on a synced account: its trades come from the broker (D-63). */}
+      <div style={{ display: 'grid', gridTemplateColumns: isAutoSync(account) ? '1fr auto' : '1fr 1fr auto', gap: '8px' }}>
         <button type="button" onClick={onOpen} style={buttonStyle(true)}>VIEW ACCOUNT</button>
-        <button type="button" onClick={onAddTrade} style={buttonStyle(false)}>+ TRADE</button>
+        {!isAutoSync(account) && <button type="button" onClick={onAddTrade} style={buttonStyle(false)}>+ TRADE</button>}
         <button type="button" onClick={onClose} aria-label="Put the card back" style={{ ...buttonStyle(false), padding: '9px 12px' }}>✕</button>
       </div>
     </div>

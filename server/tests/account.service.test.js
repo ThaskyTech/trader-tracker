@@ -142,7 +142,8 @@ describe('account validators', () => {
     })
 
     it('refuses synced types until their adapters exist', () => {
-        expect(createAccountSchema.safeParse({ ...valid, provider: 'BINANCE' }).success).toBe(false)
+        expect(createAccountSchema.safeParse({ ...valid, provider: 'CTRADER' }).success).toBe(false)
+        expect(createAccountSchema.safeParse({ ...valid, provider: 'BINANCE' }).success).toBe(false) // needs a key
     })
 
     it('requires a style on new accounts (D-47) and 4-digit account numbers', () => {

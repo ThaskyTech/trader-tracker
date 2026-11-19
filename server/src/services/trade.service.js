@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client'
 
-const DECIMAL_FIELDS = ['lotSize', 'entryPrice', 'exitPrice', 'pnl', 'pnlUsd', 'fxRate']
+const DECIMAL_FIELDS = ['lotSize', 'entryPrice', 'exitPrice', 'pnl', 'pnlUsd', 'fxRate', 'fees']
 
 // Prisma returns Decimal objects, which JSON would serialise as strings ("1250.5").
 // Storage and all maths stay exact. Values are only converted to plain numbers

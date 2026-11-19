@@ -6,14 +6,27 @@ const sum = (rows, field) => rows.reduce((total, row) => total.plus(row[field]),
 
 const ACCOUNT_DECIMALS = ['openingBalance', 'openingFxRate', 'openingBalanceUsd']
 const CASH_DECIMALS = ['amount', 'fxRate', 'amountUsd']
+const POSITION_DECIMALS = ['quantity', 'entryPrice', 'markPrice', 'unrealizedPnl', 'unrealizedPnlUsd']
 
 // Decimals become plain numbers only here, at the API boundary (D-20).
-// The encrypted credentials never leave the server (D-15, D-16).
-export function toAccountDTO(account, figures){
-    const { credentialsEncrypted, ...dto } = account
+// The encrypted credentials never leave the server (D-15, D-16), nor does the sync
+// cursor (internal). The reported balance reaches the client through `figures`.
+//   extra: { syncing } from the sync service
+const SERVER_ONLY = ['credentialsEncrypted', 'syncCursor', 'reportedBalance', 'reportedBalanceUsd', 'reportedFloating', 'reportedFloatingUsd']
+
+export function toAccountDTO(account, figures, extra = {}){
+    const dto = { ...account }
+    for(const field of SERVER_ONLY) delete dto[field]
     for(const field of ACCOUNT_DECIMALS) if(dto[field] != null) dto[field] = Number(dto[field])
-    dto.hasCredentials = Boolean(credentialsEncrypted)
+    dto.hasCredentials = Boolean(account.credentialsEncrypted)
+    Object.assign(dto, extra)
     return figures ? { ...dto, figures } : dto
+}
+
+export function toPositionDTO(position){
+    const dto = { ...position }
+    for(const field of POSITION_DECIMALS) if(dto[field] != null) dto[field] = Number(dto[field])
+    return dto
 }
 
 export function toCashDTO(movement){
@@ -41,16 +54,26 @@ export function balanceParts(account, trades, cash){
     return { opening, tradePnl, deposits, withdrawals, adjustments, balance }
 }
 
-// D-19 balance, in USD, with the breakdown the Cash tab shows. Calculated when read,
-// never stored, so adding, editing or deleting a trade changes it with no extra step.
+// A synced account that has completed a sync: its balance is the broker's (D-64).
+export const usesReportedBalance = account => account.reportedBalanceUsd != null
+
+// The balance in USD with the breakdown the Cash tab shows, and equity (D-02).
 //   trades: [{ closedAt, pnlUsd }] for this account
 //   cash:   [{ type, amountUsd, occurredAt }] for this account (signed amounts)
 //   month:  { start, end } of the current local month, for the card's month P&L (D-47)
-// Equity = balance + floating P&L. Manual accounts have no live positions, so floating
-// is 0 until synced accounts report open positions (roadmap 7).
-export function accountFigures(account, trades, cash, month){
-    const { opening, tradePnl, deposits, withdrawals, adjustments, balance } = balanceParts(account, trades, cash)
-    const floating = zero()
+//   openPositions: how many positions the broker reports open
+// Manual accounts: D-19's calculated balance, recalculated whenever it's read, and no
+// floating P&L. Synced accounts: the balance and floating P&L the broker last reported
+// (D-64). `other` is what the breakdown can't explain from trades and transfers: fees
+// and funding on still-open positions, rebates, closes of positions opened before the
+// import window. Always 0 for manual accounts.
+export function accountFigures(account, trades, cash, month, openPositions = 0){
+    const parts = balanceParts(account, trades, cash)
+    const { opening, tradePnl, deposits, withdrawals, adjustments } = parts
+    const reported = usesReportedBalance(account)
+    const balance = reported ? new Prisma.Decimal(account.reportedBalanceUsd) : parts.balance
+    const floating = reported ? new Prisma.Decimal(account.reportedFloatingUsd ?? 0) : zero()
+    const other = balance.minus(parts.balance)
 
     // The card's month P&L is closed-trade P&L only: a deposit isn't performance (D-27).
     const inMonth = month ? trades.filter(t => t.closedAt >= month.start && t.closedAt < month.end) : []
@@ -61,8 +84,10 @@ export function accountFigures(account, trades, cash, month){
         deposits: deposits.toNumber(),
         withdrawals: withdrawals.toNumber(),
         adjustments: adjustments.toNumber(),
+        other: other.toNumber(),
         balance: balance.toNumber(),
         floating: floating.toNumber(),
+        openPositions,
         equity: balance.plus(floating).toNumber(),
         month: summarizeTrades(inMonth),
         // Every trade on the account, opening date or not: shown as "N trades kept" when
@@ -110,6 +135,28 @@ export function equitySeries(account, trades, cash, days){
             .filter(c => c.occurredAt >= day.start && c.occurredAt < day.end)
             .map(c => ({ type: c.type, amountUsd: Number(c.amountUsd) }))
         points.push({ date: day.date, value: value.toNumber(), movements })
+    }
+    return points
+}
+
+// Equity per local day for a synced account (D-64), from its daily snapshots: each day
+// shows the latest snapshot taken before the day ended. Days before the first snapshot
+// are left out. Movements are marked like equitySeries' (synced transfers).
+//   snapshots: [{ takenAt, equityUsd }] oldest first
+export function snapshotSeries(snapshots, cash, days){
+    const points = []
+    let next = 0
+    let value = null
+    for(const day of days){
+        while(next < snapshots.length && snapshots[next].takenAt < day.end){
+            value = snapshots[next].equityUsd
+            next++
+        }
+        if(value === null) continue
+        const movements = cash
+            .filter(c => c.occurredAt >= day.start && c.occurredAt < day.end)
+            .map(c => ({ type: c.type, amountUsd: Number(c.amountUsd) }))
+        points.push({ date: day.date, value: Number(value), movements })
     }
     return points
 }

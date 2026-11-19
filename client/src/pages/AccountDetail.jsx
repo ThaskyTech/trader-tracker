@@ -33,6 +33,8 @@ export default function AccountDetail() {
   const navigate = useNavigate()
   const { accounts, active, byId, titleOf, error, refresh } = useAccounts()
   const [tab, setTab] = useState('overview')
+  // Replace key: opened from the banner (key rejected) or the Connection tab.
+  const [replacingKey, setReplacingKey] = useState(false)
   const account = byId(id)
 
   if (!account) {
@@ -58,7 +60,7 @@ export default function AccountDetail() {
     <div style={{ paddingBottom: '5.5rem' }}>
       <AccountHeader account={account} title={title} onBack={() => navigate(-1)} />
 
-      <StatusBanner account={account} onRestored={refresh} />
+      <StatusBanner account={account} onRestored={refresh} onReplaceKey={() => setReplacingKey(true)} />
 
       <div role="tablist" style={{ display: 'flex', margin: '0.75rem 1rem 0', borderBottom: '1px solid #1f1f1f' }}>
         {TABS.map(t => (
@@ -81,10 +83,13 @@ export default function AccountDetail() {
 
       {tab === 'overview' && <OverviewTab account={account} figures={figures} share={share} />}
       {tab === 'cash' && <CashTab account={account} figures={figures} onChanged={refresh} />}
-      {tab === 'connection' && <ConnectionTab account={account} title={title} figures={figures} onChanged={refresh} />}
+      {tab === 'connection' && <ConnectionTab account={account} title={title} figures={figures} onChanged={refresh} onReplaceKey={() => setReplacingKey(true)} />}
 
-      {/* Log a trade on this account: the form opens with the account locked */}
-      {!archived && (
+      {replacingKey && <ReplaceKeySheet account={account} onClose={() => setReplacingKey(false)} onSaved={refresh} />}
+
+      {/* Log a trade on this account: the form opens with the account locked. Not on a
+          synced account: its trades come from the broker (D-63). */}
+      {!archived && !isAutoSync(account) && (
         <Link
           to={`/trades/new?account=${account.id}`}
           aria-label={`Log a trade on ${title}`}
@@ -155,7 +160,7 @@ function AccountHeader({ account, title, onBack }) {
 // The header already says "archived", "sync failed" or when it last synced, so these add
 // only what it can't: the consequence and the fix. An account the migration created
 // without a style gets a nudge to pick one (D-47 exception).
-function StatusBanner({ account, onRestored }) {
+function StatusBanner({ account, onRestored, onReplaceKey }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const state = syncState(account)
@@ -182,12 +187,21 @@ function StatusBanner({ account, onRestored }) {
       </Banner>
     )
   }
+  if (state === 'SYNCING' && !account.lastSyncedAt) {
+    // The first import (D-62): the figures below are all zero until it lands.
+    return <Banner color="#9ca3af">Importing the last 3 months from {account.broker}. This page fills in when it's done, usually within a minute.</Banner>
+  }
   if (state === 'ERROR' || state === 'RECONNECT') {
-    // Reconnecting arrives with the sync adapters (roadmap 7-8).
+    // RECONNECT won't retry on its own (D-65), so it offers the fix; ERROR retries itself.
     return (
       <Banner color="#ef4444">
         <div>{account.lastError}</div>
-        <div style={{ color: '#9ca3af', marginTop: '4px' }}>Figures below are from {timeAgo(account.lastSyncedAt)}.</div>
+        <div style={{ color: '#9ca3af', marginTop: '4px' }}>
+          {account.lastSyncedAt ? `Figures below are from ${timeAgo(account.lastSyncedAt)}.` : 'Nothing has been imported yet.'}
+        </div>
+        {state === 'RECONNECT' && (
+          <OutlineButton color="#22c55e" onClick={onReplaceKey} style={{ marginTop: '8px' }}>REPLACE KEY</OutlineButton>
+        )}
       </Banner>
     )
   }
@@ -231,11 +245,11 @@ function OverviewTab({ account, figures, share }) {
   const [error, setError] = useState(null)
   const color = CATEGORIES[account.category].color
   // Same slot rules as the card (D-47): a figure appears only when it says something new.
-  const live = Boolean(account.positions)
+  const live = figures.openPositions > 0
   const native = account.currency !== displayCurrency ? fromUsd(figures.equity, account.currency, rates) : null
-  // Changes whenever the balance does (a trade, deposit or correction), so the chart and
-  // recent trades reload with it.
-  const version = `${account.id}:${figures.balance}:${figures.tradeCount}`
+  // Changes whenever the figures do (a trade, deposit, correction or sync), so the chart,
+  // positions and recent trades reload with them.
+  const version = `${account.id}:${figures.equity}:${figures.tradeCount}:${account.lastSyncedAt}`
 
   useEffect(() => {
     let cancelled = false
@@ -293,7 +307,7 @@ function OverviewTab({ account, figures, share }) {
           : <div style={{ color: '#555', fontSize: '12px', padding: '2rem 0', textAlign: 'center' }}>Loading…</div>}
       </Section>
 
-      <Positions account={account} />
+      <Positions account={account} version={version} />
 
       <div style={{ marginTop: '0.75rem' }}>
         <PnlCard view={view} summary={shownMonth?.summary} previousSummary={shownMonth?.previousSummary} />
@@ -333,12 +347,24 @@ function Figure({ label, value, color = '#e5e7eb' }) {
   )
 }
 
-// Synced accounts report open positions from roadmap 7; until then every account is
-// manual and only closed trades count, which this says rather than showing an empty list.
-function Positions({ account }) {
+// Open positions as of the last sync (D-64). Manual accounts have none to show, which
+// this says rather than showing an empty list.
+function Positions({ account, version }) {
   const { formatUsd } = useCurrency()
+  const auto = isAutoSync(account)
+  const [loaded, setLoaded] = useState(null) // { key, positions }
+  const [error, setError] = useState(null)
 
-  if (!account.positions) {
+  useEffect(() => {
+    if (!auto) return
+    let cancelled = false
+    accountApi.positions(account.id)
+      .then(({ positions }) => { if (!cancelled) setLoaded({ key: version, positions }) })
+      .catch(err => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [auto, account.id, version])
+
+  if (!auto) {
     return (
       <Section title="OPEN POSITIONS">
         <div style={{ color: '#555', fontSize: '12px', lineHeight: 1.5 }}>
@@ -350,35 +376,32 @@ function Positions({ account }) {
     )
   }
 
-  const { kind, items } = account.positions
+  const positions = loaded?.key === version ? loaded.positions : null
   return (
-    <Section title={kind === 'HOLDINGS' ? 'HOLDINGS' : 'OPEN POSITIONS'}>
-      {items.length === 0 && <div style={{ color: '#555', fontSize: '12px' }}>Nothing open right now.</div>}
-      {items.map((p, i) => {
-        const pnl = p.floatingUsd ?? p.unrealisedUsd ?? 0
-        return (
-          <div key={p.symbol + i} style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
-            padding: '10px 0', borderTop: i ? '1px solid #1f1f1f' : 'none',
-          }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ color: '#e5e7eb', fontSize: '13px' }}>
-                {p.symbol}
-                {p.direction && <span style={{ color: p.direction === 'LONG' ? '#22c55e' : '#ef4444', fontSize: '11px', marginLeft: '8px' }}>{p.direction}</span>}
-              </div>
-              <div style={{ color: '#555', fontSize: '11px', marginTop: '3px' }}>
-                {kind === 'HOLDINGS'
-                  ? `${p.quantity} · ${formatUsd(p.valueUsd)}`
-                  // Futures sizes are coin quantities (0.015 BTC); forex sizes are lots.
-                  : `${p.lotSize} ${account.category === 'CRYPTO' ? p.symbol.replace(/USDT$/, '') : 'lots'} · ${p.entryPrice} → ${p.currentPrice}`}
-              </div>
+    <Section title="OPEN POSITIONS">
+      {error && <div role="alert" style={{ color: '#ef4444', fontSize: '12px' }}>{error}</div>}
+      {!error && !positions && <div style={{ color: '#555', fontSize: '12px' }}>Loading…</div>}
+      {positions?.length === 0 && <div style={{ color: '#555', fontSize: '12px' }}>Nothing open right now.</div>}
+      {positions?.map((p, i) => (
+        <div key={p.id} style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+          padding: '10px 0', borderTop: i ? '1px solid #1f1f1f' : 'none',
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: '#e5e7eb', fontSize: '13px' }}>
+              {p.symbol}
+              <span style={{ color: p.direction === 'LONG' ? '#22c55e' : '#ef4444', fontSize: '11px', marginLeft: '8px' }}>{p.direction}</span>
             </div>
-            <div style={{ color: pnl >= 0 ? '#22c55e' : '#ef4444', fontSize: '13px', flexShrink: 0 }}>
-              {formatUsd(pnl, { signed: true })}
+            {/* Size in coins for futures (0.015 BTC). Entry → mark shows how far price has moved. */}
+            <div style={{ color: '#555', fontSize: '11px', marginTop: '3px' }}>
+              {p.quantity} {account.category === 'CRYPTO' ? p.symbol.replace(/(USDT|USDC)$/, '') : 'lots'} · {p.entryPrice}{p.markPrice != null && ` → ${p.markPrice}`}
             </div>
           </div>
-        )
-      })}
+          <div style={{ color: p.unrealizedPnlUsd >= 0 ? '#22c55e' : '#ef4444', fontSize: '13px', flexShrink: 0 }}>
+            {formatUsd(p.unrealizedPnlUsd, { signed: true })}
+          </div>
+        </div>
+      ))}
     </Section>
   )
 }
@@ -415,12 +438,24 @@ function CashTab({ account, figures, onChanged }) {
     <>
       {/* How the balance is built up: makes every jump in net worth explainable */}
       <Section title="WHERE THE BALANCE COMES FROM">
-        <Row label="Opening balance" value={formatUsd(figures.opening)} />
+        {/* A synced account's opening point is the start of the import, not something the
+            user typed, so its date is what explains it (D-64). */}
+        <Row
+          label={auto ? `Balance on ${new Date(account.openingDate).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Opening balance'}
+          value={formatUsd(figures.opening)}
+        />
         <Row label="Closed trades P/L" value={formatUsd(figures.tradePnl, { signed: true })} />
         <Row label="Deposits" value={formatUsd(figures.deposits, { signed: true })} />
         <Row label="Withdrawals" value={formatUsd(figures.withdrawals, { signed: true })} />
         {figures.adjustments !== 0 && <Row label="Balance corrections" value={formatUsd(figures.adjustments, { signed: true })} />}
+        {/* The broker's balance minus what the rows above explain (D-64). Only synced accounts have it. */}
+        {Math.abs(figures.other) >= 0.005 && <Row label="Other at broker" value={formatUsd(figures.other, { signed: true })} />}
         <Row label="Balance" value={formatUsd(figures.balance)} strong />
+        {Math.abs(figures.other) >= 0.005 && (
+          <div style={{ color: '#555', fontSize: '11px', lineHeight: 1.5, marginTop: '8px' }}>
+            Other: fees and funding on positions still open, rebates, and positions opened before the import.
+          </div>
+        )}
       </Section>
 
       <Section
@@ -536,7 +571,7 @@ function CashSheet({ account, type, onClose, onSaved }) {
 
 // --- Connection panel, details, archive and delete ---
 
-function ConnectionTab({ account, title, figures, onChanged }) {
+function ConnectionTab({ account, title, figures, onChanged, onReplaceKey }) {
   const navigate = useNavigate()
   const { formatUsd } = useCurrency()
   const [sheet, setSheet] = useState(null) // 'correct' | 'archive' | 'delete'
@@ -545,6 +580,23 @@ function ConnectionTab({ account, title, figures, onChanged }) {
   const provider = PROVIDERS[account.provider]
   const auto = isAutoSync(account)
   const archived = Boolean(account.archivedAt)
+
+  const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState(null)
+
+  // D-65: the server allows one a minute per account and says so if tapped again.
+  const syncNow = async () => {
+    setSyncing(true)
+    setSyncError(null)
+    try {
+      await accountApi.syncNow(account.id)
+      await onChanged()
+    } catch (err) {
+      setSyncError(err.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const archive = async () => {
     setBusy(true)
@@ -570,11 +622,24 @@ function ConnectionTab({ account, title, figures, onChanged }) {
         <Row label="Account number" value={account.accountNumber ? `ends in ${account.accountNumber}` : 'not set'} />
         {auto && <Row label="Credentials" value={account.credentialHint ?? 'None (removed)'} />}
 
-        {/* Sync now and replace key arrive with the sync adapters (roadmap 7-8). */}
         {!archived && !auto && (
           <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
             <OutlineButton onClick={() => setSheet('correct')}>CORRECT BALANCE</OutlineButton>
           </div>
+        )}
+        {/* Synced accounts: the broker's figures can't be corrected by hand (D-63). */}
+        {!archived && auto && (
+          <>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+              {account.hasCredentials && (
+                <OutlineButton color="#22c55e" onClick={syncNow} disabled={syncing || account.syncing}>
+                  {syncing || account.syncing ? 'SYNCING…' : 'SYNC NOW'}
+                </OutlineButton>
+              )}
+              <OutlineButton onClick={onReplaceKey}>REPLACE KEY</OutlineButton>
+            </div>
+            {syncError && <div role="alert" style={{ color: '#ef4444', fontSize: '12px', marginTop: '8px' }}>{syncError}</div>}
+          </>
         )}
         {account.provider === 'MT5' && (
           <div style={{ color: '#555', fontSize: '11px', marginTop: '12px', lineHeight: 1.5 }}>
@@ -696,6 +761,50 @@ function DetailsForm({ account, onSaved }) {
         <PrimaryButton type="submit" disabled={!changed || saving}>{saving ? 'SAVING…' : saved && !changed ? 'SAVED' : 'SAVE DETAILS'}</PrimaryButton>
       </form>
     </Section>
+  )
+}
+
+// Replace key (D-45, D-67): same check as when the account was added. The sync carries
+// on from where it stopped, so nothing is imported twice.
+function ReplaceKeySheet({ account, onClose, onSaved }) {
+  const [apiKey, setApiKey] = useState('')
+  const [apiSecret, setApiSecret] = useState('')
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const save = async e => {
+    e.preventDefault()
+    if (!apiKey.trim() || !apiSecret.trim()) return setError('Paste both the API key and the secret key.')
+    setSaving(true)
+    setError(null)
+    try {
+      await accountApi.replaceKey(account.id, { apiKey: apiKey.trim(), apiSecret: apiSecret.trim() })
+      await onSaved()
+      onClose()
+    } catch (err) {
+      setError(err.message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Sheet title="Replace key" onClose={onClose}>
+      <ul style={listStyle}>
+        {(PROVIDERS[account.provider].keySteps ?? []).map(line => <li key={line}>{line}</li>)}
+        <li>Use a key from the same {account.broker} account, or its trades will mix with this one's.</li>
+      </ul>
+      <form onSubmit={save} noValidate>
+        <Field label="API KEY" htmlFor="replace-key">
+          <input id="replace-key" value={apiKey} onChange={e => { setApiKey(e.target.value); setError(null) }}
+            autoComplete="off" spellCheck={false} autoCapitalize="none" style={inputStyle(false)} />
+        </Field>
+        <Field label="SECRET KEY" htmlFor="replace-secret" error={error}>
+          <input id="replace-secret" type="password" value={apiSecret} onChange={e => { setApiSecret(e.target.value); setError(null) }}
+            autoComplete="off" spellCheck={false} autoCapitalize="none" style={inputStyle(Boolean(error))} />
+        </Field>
+        <PrimaryButton type="submit" disabled={saving}>{saving ? `CHECKING WITH ${account.broker.toUpperCase()}…` : 'CHECK AND SAVE'}</PrimaryButton>
+      </form>
+    </Sheet>
   )
 }
 

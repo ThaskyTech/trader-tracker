@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth.middleware.js'
 import {
     listAccounts, getAccount, createAccount, updateAccount, archiveAccount, restoreAccount,
     deleteAccount, listCash, addCash, correctBalance, getEquity,
+    replaceCredentials, syncNow, listPositions,
 } from '../controllers/account.controller.js'
 
 const router = Router()
@@ -19,5 +20,8 @@ router.get('/:id/cash', listCash)
 router.post('/:id/cash', addCash)
 router.post('/:id/balance-correction', correctBalance)
 router.get('/:id/equity', getEquity)
+router.get('/:id/positions', listPositions)
+router.post('/:id/credentials', replaceCredentials)
+router.post('/:id/sync', syncNow)
 
 export default router

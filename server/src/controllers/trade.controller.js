@@ -9,7 +9,7 @@ import {
     createTradeSchema, updateTradeSchema, checkTradeTimes,
     dayQuerySchema, monthQuerySchema, listTradesQuerySchema, tradeFilterSchema
 } from '../validators/trade.schema.js'
-import { findWritableAccount } from './account.controller.js'
+import { findManualAccount } from './account.controller.js'
 import { getLocalParts, localDayRange, localMonthRange, parseDateString } from '../utils/time.js'
 
 // No try/catch here: Express 5 sends any thrown error, including a ZodError from
@@ -24,8 +24,8 @@ function resolveMonth(query){
 
 export async function createTrade(req, res){
     const data = createTradeSchema.parse(req.body)
-    // Another user's account is a 404 and an archived one a 400 (D-18, D-33).
-    await findWritableAccount(req.userId, data.accountId)
+    // Another user's account is a 404; an archived or synced one a 400 (D-18, D-33, D-63).
+    await findManualAccount(req.userId, data.accountId)
     // Store the USD value alongside what was typed, using the rate on the close date.
     const fx = await convertPnl(data)
 
@@ -97,8 +97,14 @@ export async function updateTrade(req, res){
 
     // Look the trade up by id AND owner. Someone else's trade gives the same 404
     // as a missing one, so the API never reveals that it exists.
-    const existing = await prisma.trade.findFirst({ where: { id: req.params.id, userId: req.userId } })
+    const existing = await prisma.trade.findFirst({ where: { id: req.params.id, userId: req.userId }, include: TRADE_INCLUDE })
     if(!existing) throw new HttpError(404, 'Trade not found.')
+
+    // A synced trade is the broker's record: only the user's own notes on it can
+    // change, or it would disagree with the broker (D-63).
+    if(existing.source !== 'MANUAL' && Object.keys(data).some(field => field !== 'notes')){
+        throw new HttpError(400, `This trade was synced from ${existing.account.broker}, so only its notes can be edited.`)
+    }
 
     const problem = checkTradeTimes({
         openedAt: data.openedAt ?? existing.openedAt,
@@ -107,7 +113,7 @@ export async function updateTrade(req, res){
     if(problem) throw new HttpError(400, `closedAt: ${problem}`)
 
     // Moving a trade to another account: same checks as creating one there.
-    if(data.accountId && data.accountId !== existing.accountId) await findWritableAccount(req.userId, data.accountId)
+    if(data.accountId && data.accountId !== existing.accountId) await findManualAccount(req.userId, data.accountId)
 
     // The USD value depends on the amount, its currency and the close date (which
     // picks the rate). If any of them change, convert again using the merged values.
@@ -126,9 +132,12 @@ export async function updateTrade(req, res){
 }
 
 export async function deleteTrade(req, res){
-    // deleteMany with userId checks ownership and deletes in one query.
-    const { count } = await prisma.trade.deleteMany({ where: { id: req.params.id, userId: req.userId } })
-    if(count === 0) throw new HttpError(404, 'Trade not found.')
+    const existing = await prisma.trade.findFirst({ where: { id: req.params.id, userId: req.userId }, include: TRADE_INCLUDE })
+    if(!existing) throw new HttpError(404, 'Trade not found.')
+    // The next sync would only bring it back (D-63).
+    if(existing.source !== 'MANUAL') throw new HttpError(400, `This trade was synced from ${existing.account.broker}, so it can't be deleted.`)
+
+    await prisma.trade.delete({ where: { id: existing.id } })
 
     res.status(200).json({ message: 'Trade deleted successfully.' })
 }

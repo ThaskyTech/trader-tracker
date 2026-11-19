@@ -10,8 +10,8 @@ import { useAccounts } from '../context/AccountsContext'
 import { accountApi } from '../api/client'
 
 // Add-account wizard (D-16): type -> connect (automatic types only) -> details -> verify -> done.
-// Only MT5 and manual accounts can be created until the sync adapters exist (roadmap
-// 7-8). The connect screens for the automatic types are kept for then.
+// Binance, MT5 and manual accounts can be created. cTrader and IBKR show as coming soon
+// until their adapters exist (roadmap 8); their connect screens are kept for then.
 export default function AddAccount() {
   const navigate = useNavigate()
   const [step, setStep] = useState('type')
@@ -72,7 +72,7 @@ export default function AddAccount() {
           <VerifyStep
             details={details}
             onDone={r => { setResult(r); setStep('done') }}
-            onFail={() => setStep('details')}
+            onFail={backTo => setStep(backTo)}
           />
         )}
         {step === 'done' && result && <DoneStep result={result} />}
@@ -137,13 +137,9 @@ function ConnectStep({ provider, initial, onNext }) {
   if (provider === 'CTRADER') return <CTraderConnect initial={initial} onNext={onNext} />
 
   const fields = provider === 'BINANCE'
-    ? [{ key: 'apiKey', label: 'API KEY' }, { key: 'secret', label: 'SECRET KEY', secret: true }]
+    ? [{ key: 'apiKey', label: 'API KEY' }, { key: 'apiSecret', label: 'SECRET KEY', secret: true }]
     : [{ key: 'token', label: 'FLEX TOKEN', secret: true }, { key: 'queryId', label: 'QUERY ID', numeric: true }]
-  const help = provider === 'BINANCE' ? [
-    'In Binance: Profile → API Management → Create API.',
-    'Tick only "Enable Reading". Leave trading and withdrawals off.',
-    'We check this before saving and refuse keys that can trade (D-15).',
-  ] : [
+  const help = provider === 'BINANCE' ? PROVIDERS.BINANCE.keySteps : [
     'In IBKR Client Portal: Settings → Flex Web Service → generate a token.',
     'Reports → Flex Queries: create an Activity query with Trades, Open Positions and Cash Transactions, and copy its Query ID.',
     'The token is read-only and lasts up to a year. We remind you before it expires.',
@@ -297,10 +293,13 @@ function DetailsStep({ provider, credentials, initial, onNext }) {
     }
     setErrors(found)
     if (Object.keys(found).length > 0) return
-    onNext({ form, draft: {
-      provider, broker, style: form.style, category: form.category, currency: form.currency,
-      accountNumber: candidate.accountNumber || null, openingBalance,
-    } })
+    // A synced account's broker, currency and balance come from the broker itself.
+    onNext({ form, draft: p.sync === 'auto'
+      ? { provider, style: form.style, category: form.category, accountNumber: candidate.accountNumber || null, credentials }
+      : {
+        provider, broker, style: form.style, category: form.category, currency: form.currency,
+        accountNumber: candidate.accountNumber || null, openingBalance,
+      } })
   }
 
   return (
@@ -377,8 +376,9 @@ function DetailsStep({ provider, credentials, initial, onNext }) {
 
 // --- Step 4: create ---
 
-// Saves the account. A server-side refusal (e.g. a title clash found since the details
-// step) goes back to the details with the message.
+// Saves the account. For a synced account the server first checks the key with the
+// broker (D-67): a refused key goes back to the key step, anything else (e.g. a title
+// clash found since the details step) back to the details, with the message.
 function VerifyStep({ details, onDone, onFail }) {
   const { refresh } = useAccounts()
   const [error, setError] = useState(null)
@@ -390,37 +390,49 @@ function VerifyStep({ details, onDone, onFail }) {
     started.current = true
     accountApi.create(details.draft)
       .then(async ({ account }) => { await refresh(); onDone({ account }) })
-      .catch(err => setError(err.message))
+      .catch(err => setError({ message: err.message, keyProblem: Boolean(err.details?.credentials) }))
   }, [details, onDone, refresh])
 
   if (error) {
     return (
       <div>
         <div role="alert" style={{ color: '#ef4444', fontSize: '13px', padding: '12px', borderRadius: '10px', border: '1px solid #ef444444', backgroundColor: '#ef444411', lineHeight: 1.5, marginBottom: '14px' }}>
-          {error}
+          {error.message}
         </div>
-        <PrimaryButton onClick={onFail}>BACK TO DETAILS</PrimaryButton>
+        <PrimaryButton onClick={() => onFail(error.keyProblem ? 'connect' : 'details')}>
+          {error.keyProblem ? 'BACK TO THE KEY' : 'BACK TO DETAILS'}
+        </PrimaryButton>
       </div>
     )
   }
 
-  return <div style={{ color: '#9ca3af', fontSize: '13px', padding: '0.5rem 0' }}>Creating the account…</div>
+  return (
+    <div style={{ color: '#9ca3af', fontSize: '13px', padding: '0.5rem 0' }}>
+      {details.draft.credentials ? `Checking the key with ${PROVIDERS[details.draft.provider].broker}…` : 'Creating the account…'}
+    </div>
+  )
 }
 
 // --- Done ---
 
 function DoneStep({ result }) {
   const navigate = useNavigate()
-  const { titleOf } = useAccounts()
-  const { account } = result
+  const { titleOf, byId } = useAccounts()
+  // The live copy, so a synced account's card fills in when its first import lands.
+  const account = byId(result.account.id) ?? result.account
   const title = titleOf(account)
+  const synced = PROVIDERS[account.provider].sync === 'auto'
 
   return (
     <div>
       <WalletCard account={account} title={title} figures={account.figures} />
       <div style={{ color: '#22c55e', fontSize: '13px', margin: '16px 0 4px' }}>✓ {title} is in your wallet</div>
       <div style={{ color: '#777', fontSize: '12px', lineHeight: 1.5, marginBottom: '18px' }}>
-        Log trades and deposits/withdrawals against it, and its balance keeps itself up to date.
+        {!synced
+          ? 'Log trades and deposits/withdrawals against it, and its balance keeps itself up to date.'
+          : account.syncing
+            ? `Importing the last 3 months of trades and transfers from ${account.broker}. The card fills in when it's done, then it syncs every 10 minutes.`
+            : `It syncs with ${account.broker} every 10 minutes.`}
       </div>
       <PrimaryButton onClick={() => navigate(`/accounts/${account.id}`, { replace: true })}>VIEW ACCOUNT</PrimaryButton>
       <button type="button" onClick={() => navigate('/accounts', { replace: true })}

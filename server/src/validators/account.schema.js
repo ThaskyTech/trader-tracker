@@ -14,12 +14,18 @@ const accountNumber = z.string().regex(/^\d{4}$/, 'Exactly 4 digits.')
 const style = z.enum(STYLES)
 const category = z.enum(CATEGORIES)
 
-// POST /accounts. Fields a user may set; anything else (userId, sync status,
-// credentials, archivedAt, opening rate or USD value) is stripped.
-export const createAccountSchema = z.object({
-    provider: z.enum(PROVIDERS).refine(p => CREATABLE_PROVIDERS.includes(p), {
-        message: "Syncing this type of account isn't available yet. Add it as MT5 or Other (manual) for now.",
-    }),
+// A Binance API key and secret: 64 letters and digits each today; a little leeway in
+// case Binance changes the length. Checked again by Binance itself when verifying.
+const apiKeyPart = z.string().trim().min(20).max(128).regex(/^[A-Za-z0-9]+$/, 'Letters and digits only. Copy it again from Binance.')
+export const binanceCredentialsSchema = z.object({ apiKey: apiKeyPart, apiSecret: apiKeyPart })
+
+const provider = z.enum(PROVIDERS).refine(p => CREATABLE_PROVIDERS.includes(p), {
+    message: "Syncing this type of account isn't available yet. Add it as MT5 or Other (manual) for now.",
+})
+
+// Manual and MT5 accounts: the user names the broker and gives today's balance (D-19).
+const manualAccountSchema = z.object({
+    provider: z.enum(['MT5', 'MANUAL']),
     broker: z.string().trim().min(1).max(50),
     style,
     category,
@@ -28,6 +34,28 @@ export const createAccountSchema = z.object({
     // D-19: what the broker shows today, in the account's currency. Trades closed and
     // cash moved from now on are added to it.
     openingBalance: z.number().min(0).lt(MAX_AMOUNT).default(0),
+})
+
+// Binance Futures (D-12): the broker, currency and balance come from Binance itself
+// (USDT counts as USD, D-26), so only the style, category and key are asked for.
+const binanceAccountSchema = z.object({
+    provider: z.literal('BINANCE'),
+    style,
+    category: category.default('CRYPTO'),
+    accountNumber: accountNumber.nullable().optional(),
+    credentials: binanceCredentialsSchema,
+}).transform(data => ({ ...data, broker: 'Binance', currency: 'USD', openingBalance: 0 }))
+
+// POST /accounts. Fields a user may set; anything else (userId, sync status,
+// encrypted credentials, archivedAt, opening rate or USD value) is stripped.
+// The provider is checked first so an unsupported one gets a clear message.
+export const createAccountSchema = z.object({ provider }).loose().transform((data, ctx) => {
+    const result = (data.provider === 'BINANCE' ? binanceAccountSchema : manualAccountSchema).safeParse(data)
+    if(!result.success){
+        for(const issue of result.error.issues) ctx.addIssue({ code: 'custom', message: issue.message, path: issue.path })
+        return z.NEVER
+    }
+    return result.data
 })
 
 // PATCH /accounts/:id. Broker and currency can't change: trades and cash movements
