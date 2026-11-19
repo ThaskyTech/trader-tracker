@@ -3,20 +3,25 @@ export const API_URL = import.meta.env.VITE_API_URL
 // Tokens live in localStorage. That is fine for this app: the frontend and backend
 // are on different domains, which makes httpOnly cookies unreliable (Safari blocks
 // third-party cookies).
+// `remember` is "Keep me signed in on this device" (D-68); `lastActivity` is when the
+// user last touched the app, for signing out an unused tab after an hour.
 export const tokenStore = {
     getAccess: () => localStorage.getItem('accessToken'),
     getRefresh: () => localStorage.getItem('refreshToken'),
     setAccess: (token) => localStorage.setItem('accessToken', token),
     setUser: (user) => localStorage.setItem('user', JSON.stringify(user)),
-    setSession: ({ accessToken, refreshToken, user }) => {
+    isRemembered: () => localStorage.getItem('rememberDevice') === 'true',
+    getLastActivity: () => Number(localStorage.getItem('lastActivity')) || 0,
+    touch: () => localStorage.setItem('lastActivity', String(Date.now())),
+    setSession: ({ accessToken, refreshToken, user }, remember = false) => {
         localStorage.setItem('accessToken', accessToken)
         localStorage.setItem('refreshToken', refreshToken)
         localStorage.setItem('user', JSON.stringify(user))
+        localStorage.setItem('rememberDevice', String(remember))
+        localStorage.setItem('lastActivity', String(Date.now()))
     },
     clear: () => {
-        localStorage.removeItem('accessToken')
-        localStorage.removeItem('refreshToken')
-        localStorage.removeItem('user')
+        for(const key of ['accessToken', 'refreshToken', 'user', 'rememberDevice', 'lastActivity']) localStorage.removeItem(key)
     }
 }
 

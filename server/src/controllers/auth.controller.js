@@ -2,9 +2,12 @@ import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
 import prisma from '../config/db.js'
 import { PUBLIC_USER_FIELDS } from './user.controller.js'
+import { sessionExpiry } from '../utils/session.js'
 
 const SALT_ROUNDS = 10
 const ACCESS_TOKEN_TTL = '15m'
+// The JWT's own lifetime is the longest a sign-in can last. When it actually ends is
+// the database row's expiresAt (D-68): an hour after last use unless remembered.
 const REFRESH_TOKEN_TTL_DAYS = 30
 
 // Single place that creates tokens, so every flow (signup, login, refresh)
@@ -13,7 +16,7 @@ function signAccessToken(userId){
     return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL })
 }
 
-async function issueTokens(userId){
+async function issueTokens(userId, { remember = false } = {}){
     const accessToken = signAccessToken(userId)
     const refreshToken = jwt.sign(
         { userId },
@@ -25,7 +28,8 @@ async function issueTokens(userId){
         data: {
             token: refreshToken,
             userId,
-            expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000)
+            remember,
+            expiresAt: sessionExpiry(remember)
         }
     })
 
@@ -80,6 +84,8 @@ export async function signup(req, res){
 export async function login(req,res){
     try{
         const { email, password } = req.body
+        // Only an explicit true keeps the device signed in (D-68).
+        const remember = req.body.remember === true
 
         if(!email){return res.status(400).json({error: 'Email is required.'})}
         if(!password){return res.status(400).json({error: 'Password is required.'})}
@@ -90,7 +96,7 @@ export async function login(req,res){
         const passwordMatch = await bcrypt.compare(password, user.passwordHash)
         if(!passwordMatch){return res.status(401).json({error: 'Invalid email or password.'})}
 
-        const { accessToken, refreshToken } = await issueTokens(user.id)
+        const { accessToken, refreshToken } = await issueTokens(user.id, { remember })
 
         const safeUser = {
             id: user.id,
@@ -131,6 +137,11 @@ export async function refresh(req,res){
         // This also covers old tokens that were signed with a different claim name.
         if(payload.userId !== storedToken.userId){
             return res.status(401).json({ error: 'Invalid refresh token.' })
+        }
+
+        // Still in use, so a sign-in that isn't remembered gets another idle hour (D-68).
+        if(!storedToken.remember){
+            await prisma.refreshToken.update({ where: { id: storedToken.id }, data: { expiresAt: sessionExpiry(false) } })
         }
 
         res.status(200).json({ accessToken: signAccessToken(storedToken.userId) })

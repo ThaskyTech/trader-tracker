@@ -81,12 +81,14 @@ export function AccountsProvider({ children }) {
   }, [userId, refresh])
 
   const value = useMemo(() => {
-    const accounts = loaded?.userId === userId ? loaded.accounts : null
+    // Logged out, userId and loaded?.userId are both undefined, so check loaded itself
+    // too: comparing ids alone crashed every logged-out page, the login page included.
+    const accounts = loaded && userId && loaded.userId === userId ? loaded.accounts : null
     // Titles need every account: the "#5512" suffix depends on the others (D-47).
     const titleOf = account => accountTitle(account, accounts ?? [])
     const byId = new Map((accounts ?? []).map(a => [a.id, a]))
     const active = accounts?.filter(a => !a.archivedAt) ?? []
-    const mine = connection.userId === userId
+    const mine = Boolean(userId) && connection.userId === userId
     return {
       accounts,                       // null while loading
       active,

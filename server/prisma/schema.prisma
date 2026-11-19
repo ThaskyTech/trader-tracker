@@ -27,6 +27,9 @@ model RefreshToken {
   token     String   @unique
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // "Keep me signed in on this device" (D-68). Without it, expiresAt is pushed an hour
+  // ahead on every refresh, so the sign-in ends after an hour unused.
+  remember  Boolean  @default(false)
   expiresAt DateTime
   createdAt DateTime @default(now())
 

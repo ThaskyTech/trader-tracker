@@ -7,10 +7,14 @@ export default function Login() {
   const { login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  // Off by default: only for the user's own device (D-68).
+  const [remember, setRemember] = useState(false)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  const handleLogin = async () => {
+  const handleLogin = async (e) => {
+    e?.preventDefault()
+    if (loading) return
     if (!email || !password) {
       setError('All fields required.')
       return
@@ -18,7 +22,7 @@ export default function Login() {
     setLoading(true)
     setError(null)
     try {
-      await login(email, password)
+      await login(email, password, remember)
       navigate('/')
     }catch(err){
       setError(err.message)
@@ -59,14 +63,15 @@ export default function Login() {
         </div>
       </div>
 
-      {/* Form */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/* A real form, so Enter submits and password managers recognise it. */}
+      <form onSubmit={handleLogin} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div>
           <div style={{ color: '#555', fontSize: '10px', letterSpacing: '1.5px', marginBottom: '8px' }}>
             EMAIL
           </div>
           <input
             type="email"
+            autoComplete="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
             placeholder="trader@example.com"
@@ -80,12 +85,29 @@ export default function Login() {
           </div>
           <input
             type="password"
+            autoComplete="current-password"
             value={password}
             onChange={e => setPassword(e.target.value)}
             placeholder="••••••••"
             style={inputStyle}
           />
         </div>
+
+        {/* Without it, an hour unused signs you out, even with the browser left open. */}
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={e => setRemember(e.target.checked)}
+            style={{ width: '18px', height: '18px', margin: '1px 0 0', accentColor: '#16a34a', flexShrink: 0 }}
+          />
+          <span>
+            <span style={{ display: 'block', color: '#e5e7eb', fontSize: '13px' }}>Keep me signed in on this device</span>
+            <span style={{ display: 'block', color: '#555', fontSize: '11px', marginTop: '3px', lineHeight: 1.4 }}>
+              For 30 days. Only on your own device. Otherwise you're signed out after an hour unused.
+            </span>
+          </span>
+        </label>
 
         {error && (
           <div style={{
@@ -102,7 +124,7 @@ export default function Login() {
         )}
 
         <button
-          onClick={handleLogin}
+          type="submit"
           disabled={loading}
           style={{
             marginTop: '8px',
@@ -121,7 +143,7 @@ export default function Login() {
         >
           {loading ? 'AUTHENTICATING...' : 'SIGN IN'}
         </button>
-      </div>
+      </form>
 
       {/* Footer */}
       <div style={{
