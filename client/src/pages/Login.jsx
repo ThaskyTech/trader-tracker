@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { authApi } from '../api/client'
 import { BrandHeader } from '../components/common/Brand'
 
 export default function Login() {
@@ -12,6 +13,16 @@ export default function Login() {
   const [remember, setRemember] = useState(false)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+  // Hidden until the server says signups are open, and if it can't be asked.
+  const [signupsOpen, setSignupsOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    authApi.signupStatus()
+      .then(({ open }) => { if (!cancelled) setSignupsOpen(open === true) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const handleLogin = async (e) => {
     e?.preventDefault()
@@ -125,8 +136,16 @@ export default function Login() {
         </button>
       </form>
 
-      {/* No "Create one" link: signups are closed (D-04), so it only led to a refusal.
-          When a friend needs an account, signups are opened and they get the /signup link. */}
+      {/* Only while the server takes signups (D-71): when they're closed (D-04) the
+          link would only lead to a refusal. */}
+      {signupsOpen && (
+        <div style={{ marginTop: '2rem', textAlign: 'center', color: '#555', fontSize: '13px' }}>
+          No account?{' '}
+          <Link to="/signup" style={{ color: '#22c55e', textDecoration: 'none' }}>
+            Create one
+          </Link>
+        </div>
+      )}
     </div>
   )
 }

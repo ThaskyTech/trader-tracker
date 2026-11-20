@@ -5,6 +5,8 @@ import { requireAuth } from '../middleware/auth.middleware.js'
 
 const router = Router()
 
+// Public: lets the login page show "Create one" only while signups are open (D-71).
+router.get('/signup-status', (req, res) => res.json({ open: process.env.ALLOW_SIGNUPS === 'true' }))
 router.post('/signup', signup)
 router.post('/login', login)
 router.post('/refresh', refresh)

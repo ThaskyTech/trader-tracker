@@ -120,6 +120,8 @@ export const api = {
 
 // Email verification (D-70).
 export const authApi = {
+    // -> { open }: whether the server takes new signups (ALLOW_SIGNUPS, D-04).
+    signupStatus: () => api.get('/auth/signup-status'),
     // Public: the token from the emailed link is the proof.
     verifyEmail: (token) => api.post('/auth/verify-email', { token }),
     // -> { sentTo, delivered }; delivered is false when the server has no email set up.
