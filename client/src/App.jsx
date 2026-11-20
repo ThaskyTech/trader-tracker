@@ -9,16 +9,20 @@ import AddAccount from './pages/AddAccount'
 import AccountDetail from './pages/AccountDetail'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
-import { AuthProvider } from './context/AuthContext'
+import VerifyEmail from './pages/VerifyEmail'
+import { AuthProvider, useAuth, isUnverified } from './context/AuthContext'
 import { CurrencyProvider } from './context/CurrencyContext'
 import { AccountsProvider } from './context/AccountsContext'
 import ProtectedRoute from './components/common/ProtectedRoute'
 
-const AUTH_ROUTES = ['/login', '/signup']
+const AUTH_ROUTES = ['/login', '/signup', '/verify-email']
 
 function AppShell() {
   const location = useLocation()
-  const isAuthScreen = AUTH_ROUTES.includes(location.pathname)
+  const { user } = useAuth()
+  // No bottom nav before the email is verified either (D-70): every tab would show
+  // the same "check your email" screen.
+  const isAuthScreen = AUTH_ROUTES.includes(location.pathname) || isUnverified(user)
 
   return (
     <div style={{
@@ -47,6 +51,7 @@ function AppShell() {
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
         </Routes>
       </main>
 

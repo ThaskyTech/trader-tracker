@@ -7,19 +7,37 @@ datasource db {
 }
 
 model User {
-  id              String         @id @default(uuid())
-  email           String         @unique
-  username        String         @unique
-  passwordHash    String
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  username           String              @unique
+  passwordHash       String
   // Money is stored in USD. This only controls the currency amounts are shown in.
-  displayCurrency Currency       @default(USD)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  trades          Trade[]
-  accounts        Account[]
-  refreshTokens   RefreshToken[]
+  displayCurrency    Currency            @default(USD)
+  // When the user opened the link emailed at signup (D-70). Until then the app's data
+  // routes refuse them. Users from before verification existed were marked verified.
+  emailVerifiedAt    DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  trades             Trade[]
+  accounts           Account[]
+  refreshTokens      RefreshToken[]
+  emailVerifications EmailVerification[]
 
   @@map("users")
+}
+
+// A verification link that was emailed (D-70). Only the SHA-256 hash of its token is
+// stored, so someone reading the database can't use a pending link. Deleted once used.
+model EmailVerification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("email_verifications")
 }
 
 model RefreshToken {

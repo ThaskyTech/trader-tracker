@@ -3,7 +3,7 @@ import { HttpError } from '../middleware/error.middleware.js'
 import { updateMeSchema } from '../validators/user.schema.js'
 
 // The fields of a user that are safe to send to the browser (never passwordHash).
-export const PUBLIC_USER_FIELDS = { id: true, email: true, username: true, displayCurrency: true, createdAt: true }
+export const PUBLIC_USER_FIELDS = { id: true, email: true, username: true, displayCurrency: true, emailVerifiedAt: true, createdAt: true }
 
 // GET /api/users/me
 export async function getMe(req, res){

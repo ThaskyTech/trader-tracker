@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { BrandHeader } from '../components/common/Brand'
 
 export default function Signup() {
   const navigate = useNavigate()
@@ -12,7 +13,9 @@ export default function Signup() {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  const handleSignup = async () => {
+  const handleSignup = async (e) => {
+    e?.preventDefault()
+    if (loading) return
     if (!username || !email || !password || !confirm) {
       setError('All fields required.')
       return
@@ -46,38 +49,18 @@ export default function Signup() {
       padding: '2rem 1.5rem',
     }}>
 
-      {/* Title */}
-      <div style={{ marginBottom: '2.5rem' }}>
-        <div style={{
-          color: '#22c55e',
-          fontSize: '10px',
-          letterSpacing: '3px',
-          marginBottom: '8px',
-        }}>
-          TRADE TRACKER
-        </div>
-        <div style={{
-          color: '#fff',
-          fontSize: '26px',
-          fontWeight: '600',
-          letterSpacing: '-0.5px',
-        }}>
-          Create Account
-        </div>
-        <div style={{ color: '#555', fontSize: '13px', marginTop: '6px' }}>
-          Set up your command center
-        </div>
-      </div>
+      <BrandHeader />
 
-      {/* Form */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/* A real form, so Enter submits and password managers offer to save the password. */}
+      <form onSubmit={handleSignup} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div>
           <div style={labelStyle}>USERNAME</div>
           <input
             type="text"
             value={username}
             onChange={e => setUsername(e.target.value)}
-            placeholder="trader_01"
+            autoComplete="username"
+            placeholder="your_name"
             style={inputStyle}
           />
         </div>
@@ -88,7 +71,8 @@ export default function Signup() {
             type="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
-            placeholder="trader@example.com"
+            autoComplete="email"
+            placeholder="you@example.com"
             style={inputStyle}
           />
         </div>
@@ -99,6 +83,7 @@ export default function Signup() {
             type="password"
             value={password}
             onChange={e => setPassword(e.target.value)}
+            autoComplete="new-password"
             placeholder="Min. 8 characters"
             style={inputStyle}
           />
@@ -108,6 +93,7 @@ export default function Signup() {
           <div style={labelStyle}>CONFIRM PASSWORD</div>
           <input
             type="password"
+            autoComplete="new-password"
             value={confirm}
             onChange={e => setConfirm(e.target.value)}
             placeholder="••••••••"
@@ -130,7 +116,7 @@ export default function Signup() {
         )}
 
         <button
-          onClick={handleSignup}
+          type="submit"
           disabled={loading}
           style={{
             marginTop: '8px',
@@ -147,9 +133,9 @@ export default function Signup() {
             transition: 'background-color 0.2s',
           }}
         >
-          {loading ? 'CREATING ACCOUNT...' : 'CREATE ACCOUNT'}
+          {loading ? 'CREATING ACCOUNT…' : 'CREATE ACCOUNT'}
         </button>
-      </div>
+      </form>
 
       {/* Footer */}
       <div style={{

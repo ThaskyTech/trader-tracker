@@ -31,7 +31,7 @@ let onSessionExpired = () => {}
 export function setSessionExpiredHandler(handler){ onSessionExpired = handler }
 
 // Endpoints where a 401 means "wrong credentials", not "access token expired".
-const NO_REFRESH_ENDPOINTS = ['/auth/login', '/auth/signup', '/auth/refresh', '/auth/logout']
+const NO_REFRESH_ENDPOINTS = ['/auth/login', '/auth/signup', '/auth/refresh', '/auth/logout', '/auth/verify-email']
 
 async function parseBody(response){
     // Some responses aren't JSON, such as an HTML 502 page from the host or an
@@ -116,6 +116,14 @@ export const api = {
     put: (endpoint, body) => request(endpoint, { method: 'PUT', body: JSON.stringify(body)}),
     patch: (endpoint, body) => request(endpoint, { method: 'PATCH', body: JSON.stringify(body)}),
     delete: (endpoint) => request(endpoint, { method: 'DELETE'})
+}
+
+// Email verification (D-70).
+export const authApi = {
+    // Public: the token from the emailed link is the proof.
+    verifyEmail: (token) => api.post('/auth/verify-email', { token }),
+    // -> { sentTo, delivered }; delivered is false when the server has no email set up.
+    resendVerification: () => api.post('/auth/resend-verification'),
 }
 
 // The browser's IANA timezone, e.g. "Africa/Johannesburg". The server uses it to

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { io } from 'socket.io-client'
 import { API_URL, accountApi, refreshAccessToken, tokenStore } from '../api/client'
-import { useAuth } from './AuthContext'
+import { useAuth, isUnverified } from './AuthContext'
 import { accountTitle, isAutoSync } from '../utils/accounts'
 
 // The user's accounts, loaded once after login and shared by every screen that needs
@@ -20,7 +20,8 @@ const socketOrigin = () => new URL(API_URL, window.location.href).origin
 
 export function AccountsProvider({ children }) {
   const { user } = useAuth()
-  const userId = user?.id
+  // Nothing to load (or listen for) until the email is verified (D-70): the server would refuse.
+  const userId = isUnverified(user) ? undefined : user?.id
   // { userId, accounts } so a previous user's accounts are never shown after a switch.
   const [loaded, setLoaded] = useState(null)
   const [error, setError] = useState(null)

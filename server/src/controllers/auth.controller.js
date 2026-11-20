@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken'
 import prisma from '../config/db.js'
 import { PUBLIC_USER_FIELDS } from './user.controller.js'
 import { sessionExpiry } from '../utils/session.js'
+import { sendVerificationEmail } from '../services/verification.service.js'
 
 const SALT_ROUNDS = 10
 const ACCESS_TOKEN_TTL = '15m'
@@ -12,12 +13,15 @@ const REFRESH_TOKEN_TTL_DAYS = 30
 
 // Single place that creates tokens, so every flow (signup, login, refresh)
 // puts the same claim name in the payload. The middleware reads `userId`.
-function signAccessToken(userId){
-    return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL })
+// emailVerified travels in the access token (D-70), so the data routes can check it
+// without a database query on every request. It can only go from false to true, and the
+// client refreshes its token right after verifying.
+function signAccessToken(userId, emailVerified){
+    return jwt.sign({ userId, emailVerified }, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL })
 }
 
-async function issueTokens(userId, { remember = false } = {}){
-    const accessToken = signAccessToken(userId)
+async function issueTokens(userId, { remember = false, emailVerified = false } = {}){
+    const accessToken = signAccessToken(userId, emailVerified)
     const refreshToken = jwt.sign(
         { userId },
         process.env.JWT_REFRESH_SECRET,
@@ -73,6 +77,13 @@ export async function signup(req, res){
             select: PUBLIC_USER_FIELDS
         })
 
+        // A failed email doesn't fail the signup: the user can send it again from the app.
+        try {
+            await sendVerificationEmail(user)
+        } catch (err) {
+            console.error('verification email failed at signup:', err.message)
+        }
+
         const { accessToken, refreshToken } = await issueTokens(user.id)
         res.status(201).json({user, accessToken, refreshToken})
     }catch(err){
@@ -96,13 +107,14 @@ export async function login(req,res){
         const passwordMatch = await bcrypt.compare(password, user.passwordHash)
         if(!passwordMatch){return res.status(401).json({error: 'Invalid email or password.'})}
 
-        const { accessToken, refreshToken } = await issueTokens(user.id, { remember })
+        const { accessToken, refreshToken } = await issueTokens(user.id, { remember, emailVerified: Boolean(user.emailVerifiedAt) })
 
         const safeUser = {
             id: user.id,
             email: user.email,
             username: user.username,
             displayCurrency: user.displayCurrency,
+            emailVerifiedAt: user.emailVerifiedAt,
             createdAt: user.createdAt
         }
         res.status(200).json({ user: safeUser, accessToken, refreshToken })
@@ -118,7 +130,10 @@ export async function refresh(req,res){
 
         if(!refreshToken){return res.status(400).json({ error: 'Refresh token is required.' })}
 
-        const storedToken = await prisma.refreshToken.findUnique({where: {token: refreshToken}})
+        const storedToken = await prisma.refreshToken.findUnique({
+            where: {token: refreshToken},
+            include: { user: { select: { emailVerifiedAt: true } } }
+        })
         if(!storedToken){return res.status(401).json({ error: 'Invalid refresh token.' })}
 
         if(storedToken.expiresAt < new Date()){
@@ -144,7 +159,7 @@ export async function refresh(req,res){
             await prisma.refreshToken.update({ where: { id: storedToken.id }, data: { expiresAt: sessionExpiry(false) } })
         }
 
-        res.status(200).json({ accessToken: signAccessToken(storedToken.userId) })
+        res.status(200).json({ accessToken: signAccessToken(storedToken.userId, Boolean(storedToken.user.emailVerifiedAt)) })
     }catch(err){
         console.error('refresh error:', err)
         res.status(500).json({error: 'Something went wrong during refresh.'})

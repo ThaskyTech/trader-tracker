@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { requireAuth } from '../middleware/auth.middleware.js'
+import { requireAuth, requireVerified } from '../middleware/auth.middleware.js'
 import {
     listAccounts, getAccount, createAccount, updateAccount, archiveAccount, restoreAccount,
     deleteAccount, listCash, addCash, correctBalance, getEquity,
@@ -8,7 +8,8 @@ import {
 
 const router = Router()
 
-router.use(requireAuth)
+// Signed in with a verified email (D-70).
+router.use(requireAuth, requireVerified)
 router.get('/', listAccounts)
 router.post('/', createAccount)
 router.get('/:id', getAccount)

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react"
-import { api, tokenStore, setSessionExpiredHandler } from '../api/client'
+import { api, tokenStore, setSessionExpiredHandler, refreshAccessToken } from '../api/client'
 
 const AuthContext = createContext(null)
 
@@ -101,8 +101,24 @@ export function AuthProvider({children}){
         setUser(nextUser)
     }, [])
 
-    return (<AuthContext.Provider value = {{user, login, signup, logout, updateUser}}>{children}</AuthContext.Provider>)
+    // After the email is verified (D-70): a fresh access token (it carries the verified
+    // flag the server checks), then the fresh profile, which opens the app.
+    // Returns whether the user is now verified.
+    const refreshVerification = useCallback(async () => {
+        const { user: fresh } = await api.get('/users/me')
+        if(fresh.emailVerifiedAt) await refreshAccessToken()
+        updateUser(fresh)
+        return Boolean(fresh.emailVerifiedAt)
+    }, [updateUser])
+
+    return (<AuthContext.Provider value = {{user, login, signup, logout, updateUser, refreshVerification}}>{children}</AuthContext.Provider>)
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function useAuth(){return useContext(AuthContext)}
+
+// D-70. Only an explicit null counts: a user saved in the browser before verification
+// existed has no field at all, and is checked when /users/me answers rather than being
+// shown the verify screen by mistake.
+// eslint-disable-next-line react-refresh/only-export-components
+export const isUnverified = user => user?.emailVerifiedAt === null

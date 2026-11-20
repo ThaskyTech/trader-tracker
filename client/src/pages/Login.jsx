@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { BrandHeader } from '../components/common/Brand'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -40,28 +41,7 @@ export default function Login() {
       padding: '2rem 1.5rem',
     }}>
 
-      {/* Logo / title */}
-      <div style={{ marginBottom: '2.5rem' }}>
-        <div style={{
-          color: '#22c55e',
-          fontSize: '10px',
-          letterSpacing: '3px',
-          marginBottom: '8px',
-        }}>
-          TRADE TRACKER
-        </div>
-        <div style={{
-          color: '#fff',
-          fontSize: '26px',
-          fontWeight: '600',
-          letterSpacing: '-0.5px',
-        }}>
-          Command Center
-        </div>
-        <div style={{ color: '#555', fontSize: '13px', marginTop: '6px' }}>
-          Sign in to your account
-        </div>
-      </div>
+      <BrandHeader />
 
       {/* A real form, so Enter submits and password managers recognise it. */}
       <form onSubmit={handleLogin} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -74,7 +54,7 @@ export default function Login() {
             autoComplete="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
-            placeholder="trader@example.com"
+            placeholder="you@example.com"
             style={inputStyle}
           />
         </div>
@@ -141,23 +121,12 @@ export default function Login() {
             transition: 'background-color 0.2s',
           }}
         >
-          {loading ? 'AUTHENTICATING...' : 'SIGN IN'}
+          {loading ? 'SIGNING IN…' : 'SIGN IN'}
         </button>
       </form>
 
-      {/* Footer */}
-      <div style={{
-        marginTop: '2rem',
-        textAlign: 'center',
-        color: '#555',
-        fontSize: '13px',
-      }}>
-        No account?{' '}
-        <Link to="/signup" style={{ color: '#22c55e', textDecoration: 'none' }}>
-          Create one
-        </Link>
-      </div>
-
+      {/* No "Create one" link: signups are closed (D-04), so it only led to a refusal.
+          When a friend needs an account, signups are opened and they get the /signup link. */}
     </div>
   )
 }

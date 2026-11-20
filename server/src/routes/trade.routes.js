@@ -1,11 +1,12 @@
 import { Router } from 'express'
-import { requireAuth } from '../middleware/auth.middleware.js'
+import { requireAuth, requireVerified } from '../middleware/auth.middleware.js'
 import { createTrade, getTrades, getTrade, getTradesByDay, updateTrade, deleteTrade, getMonthlySummary, getCalendarSummary, getHistorySummary } from '../controllers/trade.controller.js'
 
 
 const router = Router()
 
-router.use(requireAuth)
+// Signed in with a verified email (D-70).
+router.use(requireAuth, requireVerified)
 router.post('/', createTrade)
 router.get('/', getTrades)
 router.get('/day/:date', getTradesByDay)
